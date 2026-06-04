@@ -16,6 +16,7 @@ enum KeychainService {
         case minimaxAPIKey = "MINIMAX_API_KEY"
         case minimaxCNAPIKey = "MINIMAX_CN_API_KEY"
         case qwenAPIKey = "QWEN_API_KEY"
+        case nineRouterAPIKey = "NINEROUTER_API_KEY"
         case litellmMasterKey = "LITELLM_MASTER_KEY"
     }
 

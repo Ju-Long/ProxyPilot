@@ -511,12 +511,12 @@ enum MCPServerSetup {
                         suggestion: "Valid providers: \(UpstreamProvider.cliOptionsDescription)"
                     )
                 }
-                guard upstream.requiresAPIKey, let secretKeyName = upstream.secretKey else {
+                guard let secretKeyName = upstream.secretKey else {
                     return toolError(
                         tool: "auth_set",
                         code: "E041",
                         message: "Provider \(upstream.rawValue) does not require an API key.",
-                        suggestion: "Local/helper providers do not need auth setup."
+                        suggestion: "Choose a cloud provider, or 9router when its endpoint requires a bearer token."
                     )
                 }
                 let parsedKey = stringArgument(params.arguments, name: "key", default: nil, tool: "auth_set")
@@ -1238,7 +1238,7 @@ enum MCPServerSetup {
         backend: AuthBackendInfo,
         includePath: Bool
     ) -> ProviderAuthPayload {
-        guard provider.requiresAPIKey, let secretKey = provider.secretKey else {
+        guard let secretKey = provider.secretKey else {
             return ProviderAuthPayload(
                 provider: provider.rawValue,
                 status: "not_required",
@@ -1251,7 +1251,7 @@ enum MCPServerSetup {
         let exists = (try? secrets.exists(key: secretKey)) ?? false
         return ProviderAuthPayload(
             provider: provider.rawValue,
-            status: exists ? "stored" : "not_set",
+            status: exists ? "stored" : (provider.requiresAPIKey ? "not_set" : "optional"),
             stored: exists,
             backend: backend.label,
             path: includePath ? backend.filePath : nil

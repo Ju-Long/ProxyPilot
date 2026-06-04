@@ -131,7 +131,7 @@ struct HomeDashboardView: View {
 
     private var upstreamProviderBadge: some View {
         statusBadge(
-            title: vm.upstreamProvider.title,
+            title: vm.upstreamProviderDisplayTitle,
             systemImage: "network",
             color: .accentColor
         )

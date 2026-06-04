@@ -14,7 +14,7 @@ enum AuthVerificationSupport {
         apiKeyPresent: Bool,
         fetchResult: Result<[String], Error>?
     ) -> AuthVerificationOutcome {
-        guard provider.requiresAPIKey else {
+        if !provider.requiresAPIKey && !apiKeyPresent {
             return AuthVerificationOutcome(
                 status: "not_required",
                 verified: true,

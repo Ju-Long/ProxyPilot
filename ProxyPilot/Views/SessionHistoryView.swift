@@ -17,6 +17,9 @@ struct SessionHistoryView: View {
     @State private var showAllRequests = false
     @State private var showAllInputOutputLogs = false
     @State private var selectedSessionLogViewModels: [SessionHistoryLogRecordViewModel] = []
+    @State private var selectedSessionLogLoadTask: Task<Void, Never>?
+    @State private var selectedSessionLogLoadError: String?
+    @State private var isLoadingSelectedSessionLogs = false
 
     private var selectedSession: SessionHistorySession? {
         if let selectedSessionID,
@@ -44,13 +47,10 @@ struct SessionHistoryView: View {
         }
         .onChange(of: selectedSessionID) { _, _ in
             resetSessionDetailState()
-            updateSelectedLogViewModels()
+            scheduleSelectedLogRefresh()
         }
-        .onChange(of: vm.sessionHistorySessions) { _, _ in
-            updateSelectedLogViewModels()
-        }
-        .onChange(of: sessionHistoryLogFingerprint) { _, _ in
-            updateSelectedLogViewModels()
+        .onDisappear {
+            selectedSessionLogLoadTask?.cancel()
         }
     }
 
@@ -121,7 +121,8 @@ struct SessionHistoryView: View {
             set: { selectedSessionID = $0 }
         )) {
             ForEach(vm.sessionHistorySessions) { session in
-                Text("\(session.source.uppercased()) - \(session.requestCount) req - \(session.totalTokensFormatted)")
+                let totalTokens = session.totalTokensFormatted
+                Text("\(session.source.uppercased()) - \(session.requestCount) req - \(totalTokens)")
                     .tag(Optional(session.id))
             }
         }
@@ -131,7 +132,8 @@ struct SessionHistoryView: View {
     @ViewBuilder
     private var selectedSessionSummary: some View {
         if let session = selectedSession {
-            Text("\(session.requestCount) req - \(session.totalTokensFormatted) tokens")
+            let totalTokens = session.totalTokensFormatted
+            Text("\(session.requestCount) req - \(totalTokens) tokens")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -281,16 +283,18 @@ struct SessionHistoryView: View {
     }
 
     private func modelDistribution(_ session: SessionHistorySession) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let modelDistribution = session.modelDistribution
+
+        return VStack(alignment: .leading, spacing: 8) {
             Text("Model Distribution")
                 .font(.headline)
 
-            if session.modelDistribution.isEmpty {
+            if modelDistribution.isEmpty {
                 Text("No model metadata was recorded for this session.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(session.modelDistribution, id: \.model) { entry in
+                ForEach(modelDistribution, id: \.model) { entry in
                     HStack {
                         Text(entry.model.isEmpty ? "(unknown model)" : entry.model)
                             .font(.system(.caption, design: .monospaced))
@@ -412,68 +416,83 @@ struct SessionHistoryView: View {
             Text("Input & Output Logs")
                 .font(.headline)
 
-            switch availability {
-            case .hasRecords(let count):
-                Text("\(count) prompt/output record\(count == 1 ? "" : "s") saved for this session. Expand a record to inspect the prompt and output body, copy either side, or export the full exchange as Markdown or JSON.")
+            if isLoadingSelectedSessionLogs {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading prompt/output records for this session...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let selectedSessionLogLoadError {
+                Text("Prompt/output records could not be loaded: \(selectedSessionLogLoadError)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-
-                sensitiveLogContentNotice
-
-                ForEach(visibleLogs) { log in
-                    inputOutputLogRow(log)
-                }
-
-                if hiddenLogCount > 0 {
-                    Button("Show \(hiddenLogCount) more prompt/output record\(hiddenLogCount == 1 ? "" : "s")") {
-                        showAllInputOutputLogs = true
-                    }
-                    .font(.caption)
-                } else if showAllInputOutputLogs && matchingLogs.count > SessionHistoryDisplayPolicy.defaultVisibleLogLimit {
-                    Button("Show fewer prompt/output records") {
-                        showAllInputOutputLogs = false
-                        pruneExpandedLogs(to: SessionHistoryDisplayPolicy.visibleLogs(matchingLogs, showAll: false))
-                    }
-                    .font(.caption)
-                }
-
-            case .masterLoggingDisabled:
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Full input/output logging is off. ProxyPilot still saves report-card metadata for this session history, but it does not save prompt or output bodies unless you explicitly enable logging.")
+            } else {
+                switch availability {
+                case .hasRecords(let count):
+                    Text("\(count) prompt/output record\(count == 1 ? "" : "s") saved for this session. Expand a record to inspect the prompt and output body, copy either side, or export the full exchange as Markdown or JSON.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Button("Open Input & Output Logging Settings") {
-                        onOpenAdvancedLogging()
-                    }
-                    .font(.caption)
-                }
+                    sensitiveLogContentNotice
 
-            case .retentionExpired(let retention):
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Prompt/output bodies are no longer available for this session. The session is outside the selected retention window, so any captured bodies would have been deleted while the report-card metadata stayed available.")
+                    ForEach(visibleLogs) { log in
+                        inputOutputLogRow(log)
+                    }
+
+                    if hiddenLogCount > 0 {
+                        Button("Show \(hiddenLogCount) more prompt/output record\(hiddenLogCount == 1 ? "" : "s")") {
+                            showAllInputOutputLogs = true
+                        }
+                        .font(.caption)
+                    } else if showAllInputOutputLogs && matchingLogs.count > SessionHistoryDisplayPolicy.defaultVisibleLogLimit {
+                        Button("Show fewer prompt/output records") {
+                            showAllInputOutputLogs = false
+                            pruneExpandedLogs(to: SessionHistoryDisplayPolicy.visibleLogs(matchingLogs, showAll: false))
+                        }
+                        .font(.caption)
+                    }
+
+                case .masterLoggingDisabled:
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Full input/output logging is off. ProxyPilot still saves report-card metadata for this session history, but it does not save prompt or output bodies unless you explicitly enable logging.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Button("Open Input & Output Logging Settings") {
+                            onOpenAdvancedLogging()
+                        }
+                        .font(.caption)
+                    }
+
+                case .retentionExpired(let retention):
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Prompt/output bodies are no longer available for this session. The session is outside the selected retention window, so any captured bodies would have been deleted while the report-card metadata stayed available.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text("Current retention: \(retentionDisplayName(retention))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                case .cliCaptureDisabled:
+                    Text("Input & Output Logging is enabled for the app, but CLI/MCP capture is off. ProxyPilot can show this session's report-card metadata, but it did not save prompt or output bodies for CLI traffic. Enable logging for ProxyPilot CLI in Advanced before starting a CLI or MCP session if you want future CLI/MCP prompt and output records to appear here.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Text("Current retention: \(retentionDisplayName(retention))")
-                        .font(.caption2)
+                case .enabledWaitingForRecords:
+                    Text("Full logging is enabled for this session source, but this session does not have saved prompt/output records. New records with matching session metadata will appear here as they are captured.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-
-            case .cliCaptureDisabled:
-                Text("Input & Output Logging is enabled for the app, but CLI/MCP capture is off. ProxyPilot can show this session's report-card metadata, but it did not save prompt or output bodies for CLI traffic. Enable logging for ProxyPilot CLI in Advanced before starting a CLI or MCP session if you want future CLI/MCP prompt and output records to appear here.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-            case .enabledWaitingForRecords:
-                Text("Full logging is enabled for this session source, but this session does not have saved prompt/output records. New records with matching session metadata will appear here as they are captured.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(14)
@@ -791,10 +810,7 @@ struct SessionHistoryView: View {
         if session.id == selectedSession?.id {
             return selectedSessionLogViewModels
         }
-        return SessionHistoryLogRecordViewModel.matching(
-            vm.sessionHistoryInputOutputRecords,
-            session: session
-        )
+        return []
     }
 
     private func copyRequestJSON(_ request: ProxyPilotCore.RequestRecord, offset: Int) {
@@ -943,36 +959,51 @@ struct SessionHistoryView: View {
         }
     }
 
-    private var sessionHistoryLogFingerprint: [SessionHistoryLogFingerprint] {
-        vm.sessionHistoryInputOutputRecords.map {
-            SessionHistoryLogFingerprint(id: $0.id, sessionID: $0.sessionID, timestamp: $0.timestamp)
+    private func scheduleSelectedLogRefresh() {
+        selectedSessionLogLoadTask?.cancel()
+        guard let session = selectedSession else {
+            selectedSessionLogViewModels = []
+            selectedSessionLogLoadError = nil
+            isLoadingSelectedSessionLogs = false
+            return
+        }
+        selectedSessionLogLoadTask = Task {
+            await refreshSelectedLogViewModels(for: session)
         }
     }
 
-    private func updateSelectedLogViewModels() {
-        guard let session = selectedSession else {
+    private func refreshSelectedLogViewModels(for session: SessionHistorySession) async {
+        let sessionID = session.id
+        isLoadingSelectedSessionLogs = true
+        selectedSessionLogLoadError = nil
+
+        do {
+            let records = try await vm.inputOutputLoggingRecords(sessionID: sessionID)
+            guard !Task.isCancelled, selectedSession?.id == sessionID else { return }
+            selectedSessionLogViewModels = SessionHistoryLogRecordViewModel.matching(records, session: session)
+            selectedSessionLogLoadError = nil
+        } catch {
+            guard !Task.isCancelled, selectedSession?.id == sessionID else { return }
             selectedSessionLogViewModels = []
-            return
+            selectedSessionLogLoadError = error.localizedDescription
         }
-        selectedSessionLogViewModels = SessionHistoryLogRecordViewModel.matching(
-            vm.sessionHistoryInputOutputRecords,
-            session: session
-        )
+
+        if selectedSession?.id == sessionID {
+            isLoadingSelectedSessionLogs = false
+        }
     }
 
     private func refreshHistory() async {
+        let previousSelectedSessionID = selectedSessionID
         await vm.refreshSessionHistory()
         if selectedSessionID == nil || !vm.sessionHistorySessions.contains(where: { $0.id == selectedSessionID }) {
             selectedSessionID = vm.sessionHistorySessions.first?.id
         }
-        updateSelectedLogViewModels()
+        if selectedSessionID == previousSelectedSessionID, let session = selectedSession {
+            selectedSessionLogLoadTask?.cancel()
+            await refreshSelectedLogViewModels(for: session)
+        }
     }
-}
-
-private struct SessionHistoryLogFingerprint: Equatable {
-    let id: UUID
-    let sessionID: String?
-    let timestamp: Date
 }
 
 private struct SessionHistoryExport: Encodable {

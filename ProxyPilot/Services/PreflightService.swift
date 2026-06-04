@@ -223,7 +223,7 @@ final class PreflightService {
             ))
         }
 
-        if context.upstreamProvider == .ollama || context.upstreamProvider == .lmStudio,
+        if context.upstreamProvider == .ollama || context.upstreamProvider == .lmStudio || context.upstreamProvider == .nineRouter,
            let upstreamBaseURL {
             let reachable = !isLocalProviderPortAvailable(upstreamBaseURL)
             results.append(.init(
@@ -355,6 +355,8 @@ final class PreflightService {
             return "Ollama is not listening at \(baseURL.absoluteString). Start it with `ollama serve`, then pull a model such as `ollama pull qwen2.5-coder:0.5b`."
         case .lmStudio:
             return "LM Studio is not listening at \(baseURL.absoluteString). Start LM Studio's local server and load an OpenAI-compatible model."
+        case .nineRouter:
+            return "9Router is not listening at \(baseURL.absoluteString). Start 9Router and confirm its dashboard is configured."
         default:
             return "\(provider.title) is not listening at \(baseURL.absoluteString)."
         }

@@ -34,23 +34,12 @@ struct AuthRemoveCommand: AsyncParsableCommand {
             throw ExitCode.failure
         }
 
-        guard upstreamProvider.requiresAPIKey else {
-            OutputFormatter.error(
-                command: "auth remove",
-                code: "E041",
-                message: "Provider \(upstreamProvider.rawValue) does not require an API key.",
-                suggestion: "Local/helper providers (github-copilot, ollama, lmstudio) do not need auth setup.",
-                json: json
-            )
-            throw ExitCode.failure
-        }
-
         guard let secretKeyName = upstreamProvider.secretKey else {
             OutputFormatter.error(
                 command: "auth remove",
                 code: "E041",
                 message: "Provider \(upstreamProvider.rawValue) does not require an API key.",
-                suggestion: "Choose a cloud provider (openai, groq, zai, openrouter, xai, chutes, google, deepseek, mistral, minimax, minimax-cn, qwen).",
+                suggestion: "Choose a cloud provider, or 9router when its endpoint requires a bearer token.",
                 json: json
             )
             throw ExitCode.failure

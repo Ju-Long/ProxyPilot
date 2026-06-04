@@ -127,6 +127,7 @@ enum KeysProviderViewItem: String, CaseIterable, Identifiable {
     case miniMax = "minimax"
     case miniMaxCN = "minimax-cn"
     case qwen = "qwen"
+    case nineRouter = "9router"
     case githubCopilot = "github-copilot"
     case ollama = "ollama"
     case lmStudio = "lmstudio"
@@ -151,6 +152,8 @@ enum KeysProviderViewItem: String, CaseIterable, Identifiable {
         switch provider {
         case .githubCopilot:
             return "Copilot sidecar setup and no-key local provider row."
+        case .nineRouter:
+            return "9Router local gateway setup row. No ProxyPilot API key required."
         case .ollama, .lmStudio:
             return "Local provider setup row. No ProxyPilot API key required."
         default:

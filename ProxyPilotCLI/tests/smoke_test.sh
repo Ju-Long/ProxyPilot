@@ -829,7 +829,7 @@ fi
 # ===========================================================================
 # TEST 14 — auth status --json (all providers)
 # ===========================================================================
-run_test "auth status --json lists all providers and local not_required"
+run_test "auth status --json lists all providers and optional/local auth states"
 
 AUTH_SECRETS_DIR="$(mktemp -d)"
 AUTH_STATUS_JSON="$(PROXYPILOT_SECRETS_DIR="$AUTH_SECRETS_DIR" "$BINARY" auth status --json 2>&1)"
@@ -844,8 +844,8 @@ try:
         raise SystemExit(0)
     providers = d.get("data", {}).get("providers", [])
     status = {p.get("provider"): p.get("status") for p in providers}
-    expected = {"openai", "groq", "zai", "openrouter", "xai", "chutes", "google", "deepseek", "mistral", "minimax", "minimax-cn", "qwen", "github-copilot", "ollama", "lmstudio"}
-    if expected.issubset(set(status.keys())) and status.get("github-copilot") == "not_required" and status.get("ollama") == "not_required" and status.get("lmstudio") == "not_required":
+    expected = {"openai", "groq", "zai", "openrouter", "xai", "chutes", "google", "deepseek", "mistral", "minimax", "minimax-cn", "qwen", "9router", "github-copilot", "ollama", "lmstudio"}
+    if expected.issubset(set(status.keys())) and status.get("9router") == "optional" and status.get("github-copilot") == "not_required" and status.get("ollama") == "not_required" and status.get("lmstudio") == "not_required":
         print("PASS")
     else:
         print(f"FAIL:providers={status}")
@@ -854,7 +854,7 @@ except Exception as e:
 PY
 )"
 if [[ "$AUTH_STATUS_CHECK" == "PASS" ]]; then
-    pass "auth status --json lists expected providers with local not_required"
+    pass "auth status --json lists expected providers with optional/local auth states"
 else
     fail "auth status --json lists expected providers" "$AUTH_STATUS_CHECK :: $AUTH_STATUS_JSON"
 fi
@@ -1004,6 +1004,30 @@ if [[ "$AUTH_SET_OLLAMA_CHECK" == "PASS" ]]; then
     pass "auth set --provider ollama --json returns E041"
 else
     fail "auth set ollama rejects local provider" "$AUTH_SET_OLLAMA_CHECK :: $AUTH_SET_OLLAMA_JSON"
+fi
+
+run_test "auth set stores optional 9router endpoint key"
+
+AUTH_SET_9ROUTER_JSON="$(PROXYPILOT_SECRETS_DIR="$AUTH_SECRETS_DIR" "$BINARY" auth set --provider 9router --key router-endpoint-key --json 2>&1)"
+AUTH_SET_9ROUTER_CHECK="$(python3 - "$AUTH_SET_9ROUTER_JSON" <<'PY'
+import json
+import sys
+raw = sys.argv[1]
+try:
+    d = json.loads(raw)
+    data = d.get("data", {})
+    if d.get("ok") is True and data.get("provider") == "9router" and data.get("status") == "stored":
+        print("PASS")
+    else:
+        print(f"FAIL:{d}")
+except Exception as e:
+    print(f"PARSE_ERROR:{e}")
+PY
+)"
+if [[ "$AUTH_SET_9ROUTER_CHECK" == "PASS" ]]; then
+    pass "auth set --provider 9router --json stores optional endpoint key"
+else
+    fail "auth set 9router stores optional endpoint key" "$AUTH_SET_9ROUTER_CHECK :: $AUTH_SET_9ROUTER_JSON"
 fi
 
 run_test "auth set rejects helper provider github-copilot (E041)"

@@ -61,7 +61,6 @@ struct SetupXcodeCommand: AsyncParsableCommand {
         var authBackend = authBackendInfo(for: secrets)
 
         if let inlineKey,
-           upstreamProvider.requiresAPIKey,
            let secretKeyName = upstreamProvider.secretKey {
             do {
                 try secrets.set(key: secretKeyName, value: inlineKey)
@@ -161,7 +160,7 @@ struct SetupXcodeCommand: AsyncParsableCommand {
 
         let authBackendPayload: String?
         let authPathPayload: String?
-        if inlineKey != nil && upstreamProvider.requiresAPIKey {
+        if inlineKey != nil && upstreamProvider.secretKey != nil {
             authBackendPayload = authBackend.label
             authPathPayload = authBackend.filePath
         } else {
@@ -172,7 +171,7 @@ struct SetupXcodeCommand: AsyncParsableCommand {
         let backendSuffix: String
         if let filePath = authBackend.filePath, inlineKey != nil {
             backendSuffix = " Stored auth in file backend at \(filePath)."
-        } else if inlineKey != nil && upstreamProvider.requiresAPIKey {
+        } else if inlineKey != nil && upstreamProvider.secretKey != nil {
             backendSuffix = " Stored auth in \(authBackend.label) backend."
         } else {
             backendSuffix = ""

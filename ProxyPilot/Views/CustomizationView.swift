@@ -319,6 +319,8 @@ struct CustomizationView: View {
         if provider == .qwen {
             providerBadge("New", foreground: .blue, background: .blue.opacity(0.14))
             providerBadge("Beta", foreground: .orange, background: .orange.opacity(0.16))
+        } else if provider == .nineRouter {
+            providerBadge("New", foreground: .blue, background: .blue.opacity(0.14))
         }
     }
 

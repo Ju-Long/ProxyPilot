@@ -6,6 +6,7 @@ import Testing
 struct UpstreamProviderTests {
     @Test func ollamaIsLocal() { #expect(UpstreamProvider.ollama.isLocal == true) }
     @Test func lmStudioIsLocal() { #expect(UpstreamProvider.lmStudio.isLocal == true) }
+    @Test func nineRouterIsLocal() { #expect(UpstreamProvider.nineRouter.isLocal == true) }
     @Test func githubCopilotIsLocal() { #expect(UpstreamProvider.githubCopilot.isLocal == true) }
     @Test func cloudProvidersAreNotLocal() {
         for provider in [UpstreamProvider.zAI, .openRouter, .openAI, .xAI, .chutes, .groq, .google, .deepSeek, .mistral, .miniMax, .miniMaxCN, .qwen] {
@@ -15,6 +16,7 @@ struct UpstreamProviderTests {
     @Test func localProvidersDoNotRequireAPIKey() {
         #expect(UpstreamProvider.ollama.requiresAPIKey == false)
         #expect(UpstreamProvider.lmStudio.requiresAPIKey == false)
+        #expect(UpstreamProvider.nineRouter.requiresAPIKey == false)
         #expect(UpstreamProvider.githubCopilot.requiresAPIKey == false)
     }
     @Test func cloudProvidersRequireAPIKey() {
@@ -29,6 +31,7 @@ struct UpstreamProviderTests {
         #expect(UpstreamProvider.chutes.secretKey == SecretKey.chutesAPIKey)
         #expect(UpstreamProvider.google.secretKey == SecretKey.googleAPIKey)
         #expect(UpstreamProvider.qwen.secretKey == SecretKey.qwenAPIKey)
+        #expect(UpstreamProvider.nineRouter.secretKey == SecretKey.nineRouterAPIKey)
     }
     @Test func secretKeyMappingForLocalProvidersIsNil() {
         #expect(UpstreamProvider.ollama.secretKey == nil)
@@ -37,11 +40,13 @@ struct UpstreamProviderTests {
     }
     @Test func ollamaDefaultURL() { #expect(UpstreamProvider.ollama.defaultAPIBaseURL == "http://localhost:11434/v1") }
     @Test func lmStudioDefaultURL() { #expect(UpstreamProvider.lmStudio.defaultAPIBaseURL == "http://localhost:1234/v1") }
+    @Test func nineRouterDefaultURL() { #expect(UpstreamProvider.nineRouter.defaultAPIBaseURL == "http://localhost:20128/v1") }
     @Test func googleDefaultURL() { #expect(UpstreamProvider.google.defaultAPIBaseURL == "https://generativelanguage.googleapis.com/v1beta/openai") }
     @Test func qwenDefaultURL() { #expect(UpstreamProvider.qwen.defaultAPIBaseURL == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1") }
     @Test func githubCopilotDefaultURL() { #expect(UpstreamProvider.githubCopilot.defaultAPIBaseURL == "http://127.0.0.1:8080/v1") }
     @Test func ollamaTitle() { #expect(UpstreamProvider.ollama.title == "Ollama") }
     @Test func lmStudioTitle() { #expect(UpstreamProvider.lmStudio.title == "LM Studio") }
+    @Test func nineRouterTitle() { #expect(UpstreamProvider.nineRouter.title == "9Router") }
     @Test func googleUsesProviderSpecificChatPath() {
         #expect(UpstreamProvider.google.chatCompletionsPath == "/chat/completions")
         #expect(UpstreamProvider.openAI.chatCompletionsPath == "/chat/completions")

@@ -140,6 +140,46 @@ struct ProviderCredentialResolverTests {
         }
         #expect(credential.apiKey == "stored-zai")
     }
+
+    @Test func explicit9RouterUsesOptionalStoredEndpointKey() throws {
+        let secrets = MemorySecretsProvider(values: [SecretKey.nineRouterAPIKey: "router-key"])
+
+        let resolution = ProviderCredentialResolver.resolve(
+            rawProvider: "9router",
+            explicitKey: nil,
+            upstreamURL: nil,
+            secrets: secrets,
+            environment: [:]
+        )
+
+        guard case .resolved(let credential) = resolution else {
+            Issue.record("Expected 9Router to resolve with its optional stored endpoint key.")
+            return
+        }
+        #expect(credential.provider == .nineRouter)
+        #expect(credential.apiKey == "router-key")
+        #expect(credential.secretKeyName == SecretKey.nineRouterAPIKey)
+    }
+
+    @Test func explicit9RouterDoesNotRequireEndpointKey() throws {
+        let secrets = MemorySecretsProvider(values: [:])
+
+        let resolution = ProviderCredentialResolver.resolve(
+            rawProvider: "9router",
+            explicitKey: nil,
+            upstreamURL: nil,
+            secrets: secrets,
+            environment: [:]
+        )
+
+        guard case .resolved(let credential) = resolution else {
+            Issue.record("Expected 9Router to resolve without an endpoint key.")
+            return
+        }
+        #expect(credential.provider == .nineRouter)
+        #expect(credential.apiKey == nil)
+        #expect(credential.secretKeyName == SecretKey.nineRouterAPIKey)
+    }
 }
 
 private struct MemorySecretsProvider: SecretsProvider {

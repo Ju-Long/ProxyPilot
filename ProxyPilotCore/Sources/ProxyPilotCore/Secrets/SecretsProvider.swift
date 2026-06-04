@@ -29,6 +29,7 @@ public enum SecretKey {
     public static let minimaxAPIKey    = "MINIMAX_API_KEY"
     public static let minimaxCNAPIKey  = "MINIMAX_CN_API_KEY"
     public static let qwenAPIKey       = "QWEN_API_KEY"
+    public static let nineRouterAPIKey = "NINEROUTER_API_KEY"
     public static let masterKey        = "LITELLM_MASTER_KEY"
 }
 

@@ -127,11 +127,8 @@ public struct UpstreamModel: Identifiable, Hashable, Sendable, Codable {
         promptCacheHitTokens: Int?,
         promptCacheMissTokens: Int?
     ) -> Double? {
-        if promptCacheHitPricePer1M != nil || promptCacheMissPricePer1M != nil {
-            guard let promptCacheHitTokens,
-                  let promptCacheMissTokens else {
-                return nil
-            }
+        if let promptCacheHitTokens, let promptCacheMissTokens,
+           promptCacheHitPricePer1M != nil || promptCacheMissPricePer1M != nil {
             let sanitizedHitTokens = max(promptCacheHitTokens, 0)
             let sanitizedMissTokens = max(promptCacheMissTokens, 0)
             let sanitizedCompletionTokens = max(completionTokens, 0)

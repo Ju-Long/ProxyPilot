@@ -51,7 +51,7 @@ enum ProviderCredentialResolver {
     ) -> [ProviderCredentialChoice] {
         var choices: [ProviderCredentialChoice] = []
 
-        for provider in UpstreamProvider.allCases where provider.requiresAPIKey {
+        for provider in UpstreamProvider.allCases where provider.secretKey != nil {
             guard hasCredential(for: provider, secrets: secrets, environment: environment) else { continue }
             choices.append(ProviderCredentialChoice(
                 index: choices.count + 1,
@@ -141,7 +141,7 @@ enum ProviderCredentialResolver {
         secrets: any SecretsProvider,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Bool {
-        guard provider.requiresAPIKey, let secretKey = provider.secretKey else {
+        guard let secretKey = provider.secretKey else {
             return false
         }
         if let value = environment[secretKey], !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

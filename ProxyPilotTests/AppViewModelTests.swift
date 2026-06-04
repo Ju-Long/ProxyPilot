@@ -204,7 +204,7 @@ final class AppViewModelTests: XCTestCase {
         vm?.visibleMenuBarSections = [.statusDetails, .quickActions]
         vm?.visibleHomeDashboardSections = [.sessionSummary, .sessionReportCard]
         vm?.defaultSettingsSection = .customization
-        vm?.keysProviderOrder = [.openAI, .githubCopilot, .zAI, .openRouter, .xAI, .chutes, .groq, .google, .deepSeek, .mistral, .miniMax, .miniMaxCN, .qwen, .ollama, .lmStudio]
+        vm?.keysProviderOrder = [.openAI, .githubCopilot, .zAI, .openRouter, .xAI, .chutes, .groq, .google, .deepSeek, .mistral, .miniMax, .miniMaxCN, .qwen, .nineRouter, .ollama, .lmStudio]
         vm?.visibleKeysProviders = [.openAI, .githubCopilot]
         vm?.copilotSidecarExpanded = false
         vm = nil
@@ -233,7 +233,7 @@ final class AppViewModelTests: XCTestCase {
         vm.visibleMenuBarSections = [.statusDetails, .quickActions]
         vm.visibleHomeDashboardSections = [.sessionSummary]
         vm.defaultSettingsSection = .customization
-        vm.keysProviderOrder = [.openAI, .githubCopilot, .zAI, .openRouter, .xAI, .chutes, .groq, .google, .deepSeek, .mistral, .miniMax, .miniMaxCN, .qwen, .ollama, .lmStudio]
+        vm.keysProviderOrder = [.openAI, .githubCopilot, .zAI, .openRouter, .xAI, .chutes, .groq, .google, .deepSeek, .mistral, .miniMax, .miniMaxCN, .qwen, .nineRouter, .ollama, .lmStudio]
         vm.visibleKeysProviders = [.openAI]
         vm.copilotSidecarExpanded = false
 
@@ -299,7 +299,7 @@ final class AppViewModelTests: XCTestCase {
 
         XCTAssertEqual(vm.keysProviderOrder.prefix(2), [.openAI, .githubCopilot])
         XCTAssertEqual(vm.keysProviderOrder.count, KeysProviderViewItem.defaultOrder.count)
-        XCTAssertEqual(vm.visibleKeysProviders, [.openAI, .qwen])
+        XCTAssertEqual(vm.visibleKeysProviders, [.openAI, .qwen, .nineRouter])
     }
 
     func testKeysProviderCustomizationMigratesQwenIntoLegacyVisibleProvidersOnce() {
@@ -327,6 +327,32 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: AppViewModel.didMigrateQwenVisibleProviderDefaultsKey))
     }
 
+    func testKeysProviderCustomizationMigrates9RouterIntoLegacyVisibleProvidersOnce() {
+        defaults.set(
+            [
+                KeysProviderViewItem.openAI.rawValue,
+                KeysProviderViewItem.githubCopilot.rawValue,
+                KeysProviderViewItem.qwen.rawValue
+            ],
+            forKey: AppViewModel.keysProviderOrderDefaultsKey
+        )
+        defaults.set(
+            [
+                KeysProviderViewItem.openAI.rawValue
+            ],
+            forKey: AppViewModel.visibleKeysProvidersDefaultsKey
+        )
+        defaults.set(true, forKey: AppViewModel.didMigrateQwenVisibleProviderDefaultsKey)
+
+        let vm = AppViewModel(defaults: defaults)
+
+        XCTAssertTrue(vm.keysProviderOrder.contains(.nineRouter))
+        XCTAssertTrue(vm.visibleKeysProviders.contains(.nineRouter))
+        XCTAssertTrue(vm.visibleKeysProviders.contains(.openAI))
+        XCTAssertFalse(vm.visibleKeysProviders.contains(.githubCopilot))
+        XCTAssertTrue(defaults.bool(forKey: AppViewModel.didMigrateNineRouterVisibleProviderDefaultsKey))
+    }
+
     func testKeysProviderCustomizationMigratesQwenIntoLegacyVisibilityOnlyCustomization() {
         defaults.set(
             [
@@ -338,7 +364,7 @@ final class AppViewModelTests: XCTestCase {
         let vm = AppViewModel(defaults: defaults)
 
         XCTAssertTrue(vm.keysProviderOrder.contains(.qwen))
-        XCTAssertEqual(vm.visibleKeysProviders, [.openAI, .qwen])
+        XCTAssertEqual(vm.visibleKeysProviders, [.openAI, .qwen, .nineRouter])
         XCTAssertTrue(defaults.bool(forKey: AppViewModel.didMigrateQwenVisibleProviderDefaultsKey))
     }
 
@@ -358,6 +384,7 @@ final class AppViewModelTests: XCTestCase {
             forKey: AppViewModel.visibleKeysProvidersDefaultsKey
         )
         defaults.set(true, forKey: AppViewModel.didMigrateQwenVisibleProviderDefaultsKey)
+        defaults.set(true, forKey: AppViewModel.didMigrateNineRouterVisibleProviderDefaultsKey)
 
         let vm = AppViewModel(defaults: defaults)
 
@@ -374,6 +401,7 @@ final class AppViewModelTests: XCTestCase {
             forKey: AppViewModel.visibleKeysProvidersDefaultsKey
         )
         defaults.set(true, forKey: AppViewModel.didMigrateQwenVisibleProviderDefaultsKey)
+        defaults.set(true, forKey: AppViewModel.didMigrateNineRouterVisibleProviderDefaultsKey)
 
         let vm = AppViewModel(defaults: defaults)
 
@@ -462,7 +490,7 @@ final class AppViewModelTests: XCTestCase {
         vm.visibleMenuBarSections = [.statusDetails]
         vm.visibleHomeDashboardSections = [.sessionSummary]
         vm.defaultSettingsSection = .customization
-        vm.keysProviderOrder = [.openAI, .githubCopilot, .zAI, .openRouter, .xAI, .chutes, .groq, .google, .deepSeek, .mistral, .miniMax, .miniMaxCN, .qwen, .ollama, .lmStudio]
+        vm.keysProviderOrder = [.openAI, .githubCopilot, .zAI, .openRouter, .xAI, .chutes, .groq, .google, .deepSeek, .mistral, .miniMax, .miniMaxCN, .qwen, .nineRouter, .ollama, .lmStudio]
         vm.visibleKeysProviders = [.openAI]
         vm.copilotSidecarExpanded = false
 
@@ -708,6 +736,30 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertEqual(keyCheck?.fixAction, PreflightFixAction.none)
         XCTAssertNotNil(reachability)
         XCTAssertTrue(reachability?.detail.contains("Ollama") == true)
+    }
+
+    func testPreflight9RouterShowsReachabilityHintWithoutRequiredKey() {
+        let preflight = PreflightService()
+        let context = PreflightContext(
+            proxyURLString: "http://127.0.0.1:4000",
+            useBuiltInProxy: true,
+            requireLocalAuth: false,
+            upstreamProvider: .nineRouter,
+            upstreamAPIBaseURLString: "http://127.0.0.1:59999/v1",
+            fallbackUpstreamBaseURLString: "http://localhost:20128/v1",
+            hasMasterKey: false,
+            hasUpstreamKey: false,
+            liteLLMScriptsExist: false
+        )
+
+        let results = preflight.run(context: context)
+        let keyCheck = results.first { $0.id == "upstream_key" }
+        let reachability = results.first { $0.id == "local_provider_reachability" }
+
+        XCTAssertEqual(keyCheck?.status, .info)
+        XCTAssertEqual(keyCheck?.fixAction, PreflightFixAction.none)
+        XCTAssertEqual(reachability?.status, .warning)
+        XCTAssertTrue(reachability?.detail.contains("9Router is not listening") == true)
     }
 
     func testPreflightWarnsWhenCopilotSidecarInstalledButGitHubAuthMissing() {
@@ -1429,6 +1481,104 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertTrue(vm.customProviders.isEmpty)
     }
 
+    func testActivateCustomProviderBuildsConfigWithCustomEndpointAndKey() throws {
+        let vm = AppViewModel(defaults: defaults)
+        vm.addCustomProvider(name: "Together", apiBaseURL: "https://api.together.xyz/v1", apiKey: "sk-custom")
+        let provider = try XCTUnwrap(vm.customProviders.first)
+
+        vm.activateCustomProvider(provider)
+
+        let config = try vm.buildBuiltInProxyConfig()
+
+        XCTAssertEqual(vm.selectedUpstreamSelection, .custom(provider.id))
+        XCTAssertEqual(vm.upstreamProviderDisplayTitle, "Together")
+        XCTAssertEqual(config.upstreamProvider, .openAI)
+        XCTAssertEqual(config.upstreamAPIBase.absoluteString, "https://api.together.xyz/v1")
+        XCTAssertEqual(config.upstreamAPIKey, "sk-custom")
+    }
+
+    func testCustomProviderModelStateDoesNotReuseOpenAIState() throws {
+        let vm = AppViewModel(defaults: defaults)
+        vm.selectBuiltInUpstreamProvider(.openAI)
+        vm.upstreamModels = [
+            UpstreamModel(id: "gpt-4.1", contextLength: nil, promptPricePer1M: nil, completionPricePer1M: nil)
+        ]
+        vm.selectedUpstreamModels = ["gpt-4.1"]
+        vm.selectedXcodeAgentModel = "gpt-4.1"
+        vm.saveSelectedModelsAsDefaults()
+
+        vm.addCustomProvider(name: "Together", apiBaseURL: "https://api.together.xyz/v1", apiKey: "sk-custom")
+        let provider = try XCTUnwrap(vm.customProviders.first)
+        vm.activateCustomProvider(provider)
+        vm.upstreamModels = [
+            UpstreamModel(id: "together/custom-model", contextLength: nil, promptPricePer1M: nil, completionPricePer1M: nil)
+        ]
+        vm.selectedUpstreamModels = ["together/custom-model"]
+        vm.selectedXcodeAgentModel = "together/custom-model"
+        vm.saveSelectedModelsAsDefaults()
+
+        XCTAssertEqual(vm.xcodeAgentModelCandidates, ["together/custom-model"])
+        XCTAssertEqual(vm.modelSelectionRows.map(\.id), ["together/custom-model"])
+
+        vm.selectBuiltInUpstreamProvider(.openAI)
+
+        XCTAssertEqual(vm.selectedUpstreamSelection, .builtIn(.openAI))
+        XCTAssertEqual(vm.xcodeAgentModelCandidates, ["gpt-4.1"])
+        XCTAssertEqual(vm.modelSelectionRows.map(\.id), ["gpt-4.1"])
+        XCTAssertFalse(vm.modelSelectionRows.map(\.id).contains("together/custom-model"))
+    }
+
+    func testCustomProviderEndpointEditingDoesNotOverwriteBuiltInOpenAIBaseURL() throws {
+        let vm = AppViewModel(defaults: defaults)
+        vm.selectBuiltInUpstreamProvider(.openAI)
+        vm.upstreamAPIBaseURLString = "https://api.openai.com/v1"
+
+        vm.addCustomProvider(name: "Fireworks", apiBaseURL: "https://api.fireworks.ai/inference/v1", apiKey: "sk-custom")
+        let provider = try XCTUnwrap(vm.customProviders.first)
+        vm.activateCustomProvider(provider)
+        vm.upstreamAPIBaseURLString = "https://api.fireworks.ai/inference/v1/custom"
+
+        vm.selectBuiltInUpstreamProvider(.openAI)
+
+        XCTAssertEqual(vm.upstreamAPIBaseURLString, "https://api.openai.com/v1")
+
+        let updatedProvider = try XCTUnwrap(vm.customProviders.first)
+        vm.activateCustomProvider(updatedProvider)
+
+        XCTAssertEqual(vm.upstreamAPIBaseURLString, "https://api.fireworks.ai/inference/v1/custom")
+    }
+
+    func testCustomProviderProxyConfigUsesObserveOnlyPromptCaching() throws {
+        let vm = AppViewModel(defaults: defaults)
+        vm.promptCachingMode = .computeCacheHints
+        vm.addCustomProvider(name: "Together", apiBaseURL: "https://api.together.xyz/v1", apiKey: "sk-custom")
+        let provider = try XCTUnwrap(vm.customProviders.first)
+        vm.activateCustomProvider(provider)
+
+        let config = try vm.buildBuiltInProxyConfig()
+
+        XCTAssertEqual(config.upstreamProvider, .openAI)
+        XCTAssertEqual(config.promptCaching.mode, .observeOnly)
+        XCTAssertFalse(config.promptCaching.canonicalizeJSONForCache)
+        XCTAssertTrue(config.promptCaching.recordsProviderCacheTelemetry)
+    }
+
+    func testActiveCustomProviderPersistsAcrossRelaunch() throws {
+        var vm: AppViewModel? = AppViewModel(defaults: defaults)
+        vm?.addCustomProvider(name: "Together", apiBaseURL: "https://api.together.xyz/v1", apiKey: "sk-custom")
+        let provider = try XCTUnwrap(vm?.customProviders.first)
+        vm?.activateCustomProvider(provider)
+        vm = nil
+
+        let relaunched = AppViewModel(defaults: defaults)
+
+        XCTAssertEqual(relaunched.selectedUpstreamSelection, .custom(provider.id))
+        XCTAssertEqual(relaunched.activeCustomProvider?.id, provider.id)
+        XCTAssertEqual(relaunched.upstreamProviderDisplayTitle, "Together")
+        XCTAssertEqual(relaunched.upstreamAPIBaseURLString, "https://api.together.xyz/v1")
+        XCTAssertTrue(relaunched.hasUpstreamKey)
+    }
+
     func testCustomProviderKeychainAccountFormat() {
         let provider = CustomProvider(name: "Test", apiBaseURL: "https://example.com/v1")
         XCTAssertTrue(provider.keychainAccountName.hasPrefix("CUSTOM_"))
@@ -1447,6 +1597,13 @@ final class AppViewModelTests: XCTestCase {
     func testLocalProvidersHaveNoAPIKeyPageURL() {
         XCTAssertNil(UpstreamProvider.ollama.apiKeyPageURL)
         XCTAssertNil(UpstreamProvider.lmStudio.apiKeyPageURL)
+    }
+
+    func test9RouterProviderUsesProjectURLWithOptionalKeychainKey() {
+        XCTAssertEqual(UpstreamProvider.nineRouter.defaultAPIBaseURL, "http://localhost:20128/v1")
+        XCTAssertEqual(UpstreamProvider.nineRouter.apiKeyPageURL?.absoluteString, "https://9router.com")
+        XCTAssertEqual(UpstreamProvider.nineRouter.keychainKey, .nineRouterAPIKey)
+        XCTAssertFalse(UpstreamProvider.nineRouter.requiresAPIKey)
     }
 
     func testGitHubCopilotProviderUsesProjectURLWithoutKeychainKey() {
@@ -1503,11 +1660,14 @@ final class AppViewModelTests: XCTestCase {
     }
 
     func testLocalProvidersDontRequireKeys() {
-        let localProviders: [UpstreamProvider] = [.ollama, .lmStudio, .githubCopilot]
+        let localProviders: [UpstreamProvider] = [.ollama, .lmStudio, .nineRouter, .githubCopilot]
         for provider in localProviders {
-            XCTAssertNil(provider.keychainKey, "\(provider.title) should not have a keychain key")
             XCTAssertFalse(provider.requiresAPIKey, "\(provider.title) should not require API key")
         }
+        XCTAssertNil(UpstreamProvider.ollama.keychainKey)
+        XCTAssertNil(UpstreamProvider.lmStudio.keychainKey)
+        XCTAssertNil(UpstreamProvider.githubCopilot.keychainKey)
+        XCTAssertEqual(UpstreamProvider.nineRouter.keychainKey, .nineRouterAPIKey)
     }
 
     // MARK: - Copilot Sidecar Lifecycle
@@ -1612,7 +1772,7 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertTrue(vm.copilotSidecarLogStatusText.contains("Copilot sidecar log file"))
     }
 
-    func testCopilotSidecarInstallSwitchesProviderAndURL() async {
+    func testCopilotSidecarInstallSwitchesProviderAndURL() async throws {
         var installed = false
         let service = makeCopilotSidecarService(
             endpointResponding: false,
@@ -1628,10 +1788,15 @@ final class AppViewModelTests: XCTestCase {
             }
         )
         let vm = AppViewModel(defaults: defaults, copilotSidecarService: service)
+        vm.addCustomProvider(name: "Together", apiBaseURL: "https://api.together.xyz/v1", apiKey: "sk-custom")
+        let customProvider = try XCTUnwrap(vm.customProviders.first)
+        vm.activateCustomProvider(customProvider)
 
         await vm.startCopilotSidecar()
 
         XCTAssertEqual(vm.upstreamProvider, .githubCopilot)
+        XCTAssertEqual(vm.selectedUpstreamSelection, .builtIn(.githubCopilot))
+        XCTAssertNil(vm.activeCustomProvider)
         XCTAssertEqual(vm.upstreamAPIBaseURLString, UpstreamProvider.githubCopilot.defaultAPIBaseURL)
         XCTAssertTrue(vm.isCopilotSidecarAgentInstalled)
         XCTAssertTrue(vm.isCopilotSidecarManaged)
@@ -1764,7 +1929,7 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertTrue(message.contains("not_set"))
     }
 
-    func testImportsCLISessionReportEventsIntoSessionReportCard() throws {
+    func testImportsCLISessionReportEventsIntoSessionReportCard() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1788,6 +1953,7 @@ final class AppViewModelTests: XCTestCase {
 
         let vm = AppViewModel(defaults: defaults, sessionReportURL: reportURL)
         vm.importExternalSessionReportEvents()
+        try await waitForSessionReportImport(vm: vm, expectedTotalRequests: 1)
 
         XCTAssertEqual(vm.sessionReportCard.totalRequests, 1)
         XCTAssertEqual(vm.sessionReportCard.totalPromptTokens, 80)
@@ -1795,6 +1961,29 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertEqual(vm.sessionReportCard.requests.first?.model, "glm-5")
         XCTAssertEqual(vm.sessionReportCard.requests.first?.path, "/v1/messages")
         XCTAssertEqual(vm.sessionReportCard.requests.first?.wasStreaming, true)
+    }
+
+    /// Polls until the async import path moves `sessionReportCard.totalRequests` to the
+    /// expected value. Required because `importExternalSessionReportEvents()` was made
+    /// non-blocking in commit `89cc265` — it dispatches the read on a detached task and
+    /// applies events back on the MainActor after the file I/O resolves.
+    private func waitForSessionReportImport(
+        vm: AppViewModel,
+        expectedTotalRequests: Int,
+        timeout: TimeInterval = 2.0,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if vm.sessionReportCard.totalRequests == expectedTotalRequests { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail(
+            "Timed out waiting for sessionReportCard.totalRequests == \(expectedTotalRequests); observed \(vm.sessionReportCard.totalRequests)",
+            file: file,
+            line: line
+        )
     }
 
     func testDoesNotImportOlderCLISessionWhenNewerGUISessionExists() throws {
@@ -2031,7 +2220,11 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertTrue(vm.sessionCostCoverageText.contains("Check your API account dashboard"))
     }
 
-    func testSessionEstimatedCostDoesNotGuessDeepSeekCacheSplit() {
+    func testSessionEstimatedCostFallsBackToStandardDeepSeekPricingWhenCacheSplitMissing() throws {
+        // DeepSeek publishes cache hit/miss pricing, but session records from
+        // /v1/messages don't carry a hit/miss split. Per f02b513, we fall back
+        // to standard prompt/completion pricing rather than dropping the request
+        // from the priced cost roll-up.
         defaults.set(UpstreamProvider.deepSeek.rawValue, forKey: ProviderManager.upstreamProviderDefaultsKey)
         let vm = AppViewModel(defaults: defaults)
         vm.sessionReportCard.record(.init(
@@ -2044,8 +2237,9 @@ final class AppViewModelTests: XCTestCase {
             wasStreaming: false
         ))
 
-        XCTAssertNil(vm.sessionEstimatedCostUSD)
-        XCTAssertEqual(vm.sessionPricedRequestCount, 0)
+        let cost = try XCTUnwrap(vm.sessionEstimatedCostUSD)
+        XCTAssertEqual(cost, 0.42, accuracy: 0.000001)
+        XCTAssertEqual(vm.sessionPricedRequestCount, 1)
     }
 
     func testSessionEstimatedCostUsesCachedFetchedPricingAfterRelaunch() throws {

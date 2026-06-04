@@ -535,7 +535,7 @@ struct ContentView: View {
                 .proxyFocusGlow(isActive: highlightedProxySection == .cacheSignals, color: vm.proxyPilotAccentColor)
 
                 LabeledContent("Provider") {
-                    Text(vm.upstreamProvider.title)
+                    Text(vm.upstreamProviderDisplayTitle)
                 }
 
                 LabeledContent("Signal") {
@@ -584,25 +584,33 @@ struct ContentView: View {
 
             Section("Models (Upstream Provider)") {
                 Picker("Upstream Preset", selection: Binding(
-                    get: { vm.upstreamProvider },
-                    set: { vm.upstreamProvider = $0 }
+                    get: { vm.selectedUpstreamSelection },
+                    set: { vm.selectedUpstreamSelection = $0 }
                 )) {
                     ForEach(UpstreamProvider.allCases.filter { !$0.isLocal }) { provider in
-                        Text(provider.isPreview ? "\(provider.title) (Preview)" : provider.title).tag(provider)
+                        Text(provider.isPreview ? "\(provider.title) (Preview)" : provider.title)
+                            .tag(UpstreamSelection.builtIn(provider))
+                    }
+                    if !vm.customProviders.isEmpty {
+                        Divider()
+                        ForEach(vm.customProviders) { provider in
+                            Text("\(provider.name) (Custom)")
+                                .tag(UpstreamSelection.custom(provider.id))
+                        }
                     }
                     Divider()
                     ForEach(UpstreamProvider.allCases.filter { $0.isLocal }) { provider in
-                        Text(provider.title).tag(provider)
+                        Text(provider.title).tag(UpstreamSelection.builtIn(provider))
                     }
                 }
                 .pickerStyle(.menu)
 
-                if vm.upstreamProvider.isPreview {
+                if vm.selectedUpstreamIsPreview {
                     HStack(spacing: 4) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.caption)
-                        Text("\(vm.upstreamProvider.title) support is in **Preview** and may be unstable. [Report issues on GitHub.](https://github.com/masterofthechaos/ProxyPilot-public/issues)")
+                        Text("\(vm.upstreamProviderDisplayTitle) support is in **Preview** and may be unstable. [Report issues on GitHub.](https://github.com/masterofthechaos/ProxyPilot-public/issues)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -629,7 +637,7 @@ struct ContentView: View {
 
                 HStack {
                     Spacer()
-                    Button(String(localized: "Reset to") + " " + vm.upstreamProvider.title) {
+                    Button(String(localized: "Reset to") + " " + vm.upstreamProviderDisplayTitle) {
                         vm.resetUpstreamAPIBaseURL()
                     }
                     .font(.caption)
@@ -639,13 +647,13 @@ struct ContentView: View {
                     )
                 }
 
-                if vm.upstreamProvider == .google {
+                if vm.selectedUpstreamUsesGoogleDirect {
                     Text("Google direct uses a beta OpenAI-compatible endpoint and may be less stable than OpenRouter.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                if vm.upstreamProvider.isMiniMax {
+                if vm.selectedUpstreamUsesMiniMaxRouting {
                     HStack(spacing: 8) {
                         Picker("Routing Mode", selection: $vm.miniMaxRoutingMode) {
                             Text("Standard").tag(MiniMaxRoutingMode.standard)
@@ -690,7 +698,7 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                    if vm.upstreamProvider == .openRouter {
+                    if vm.selectedUpstreamUsesOpenRouterControls {
                         Toggle("Use Exacto routing for tool-capable models", isOn: Binding(
                             get: { vm.exactoFilterEnabled },
                             set: { vm.exactoFilterEnabled = $0 }
@@ -1084,8 +1092,8 @@ struct ContentView: View {
             }
 
             Section("Checklist") {
-                if vm.upstreamProvider.requiresAPIKey {
-                    checklistRow(String(localized: "Upstream API key saved") + " (\(vm.upstreamProvider.title))", isOn: vm.hasUpstreamKey)
+                if vm.selectedUpstreamRequiresAPIKey {
+                    checklistRow(String(localized: "Upstream API key saved") + " (\(vm.upstreamProviderDisplayTitle))", isOn: vm.hasUpstreamKey)
                 }
                 checklistRow(vm.masterKeyChecklistTitle, isOn: vm.hasRequiredMasterKey)
                 checklistRow(String(localized: "Proxy URL looks valid"), isOn: vm.checklistIsProxyURLValid)
@@ -1510,6 +1518,7 @@ struct ContentView: View {
     @ViewBuilder
     private func customProviderKeyRow(_ provider: CustomProvider) -> some View {
         let hasKey = vm.customProviderHasKey(provider)
+        let isActive = vm.isCustomProviderActive(provider)
 
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -1534,9 +1543,18 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                if isActive {
+                    Text("Active")
+                        .font(.caption)
+                        .foregroundStyle(Color.accentColor)
+                }
             }
 
             HStack(spacing: 12) {
+                Button(isActive ? "Active Upstream" : "Use as Upstream") {
+                    vm.activateCustomProvider(provider)
+                }
+                .disabled(isActive)
                 Button("Delete") {
                     vm.deleteCustomProvider(provider)
                 }
@@ -1677,6 +1695,8 @@ struct ContentView: View {
         if provider == .qwen {
             providerBadge("New", foreground: .blue, background: .blue.opacity(0.14))
             providerBadge("Beta", foreground: .orange, background: .orange.opacity(0.16))
+        } else if provider == .nineRouter {
+            providerBadge("New", foreground: .blue, background: .blue.opacity(0.14))
         }
     }
 
@@ -2035,7 +2055,7 @@ struct ContentView: View {
         switch action {
         case .openUpstreamKeyEditor:
             selectedSection = .keys
-            if vm.upstreamProvider.requiresAPIKey {
+            if !vm.hasActiveCustomProvider && vm.upstreamProvider.requiresAPIKey {
                 vm.providerKeyEditing[vm.upstreamProvider] = true
                 vm.providerKeyDrafts[vm.upstreamProvider] = nil
             }

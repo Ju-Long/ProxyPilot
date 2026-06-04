@@ -2,51 +2,53 @@ import Foundation
 import ProxyPilotCore
 
 struct SessionHistorySession: Identifiable, Equatable, Sendable {
+    struct ModelCount: Equatable, Sendable {
+        let model: String
+        let count: Int
+    }
+
+    private struct Summary: Equatable, Sendable {
+        let startedAt: Date?
+        let endedAt: Date?
+        let requestCount: Int
+        let totalPromptTokens: Int
+        let totalCompletionTokens: Int
+        let totalTokens: Int
+        let totalPromptCacheHitTokens: Int
+        let totalPromptCacheMissTokens: Int
+        let totalPromptCacheWriteTokens: Int
+        let cacheAccountingAvailable: Bool
+        let cacheHitRate: Double?
+        let totalTokensFormatted: String
+        let modelDistribution: [ModelCount]
+        let p95Latency: TimeInterval?
+    }
+
     let id: String
     let source: String
     let requests: [ProxyPilotCore.RequestRecord]
+    private let summary: Summary
 
-    var startedAt: Date? { requests.first?.timestamp }
-    var endedAt: Date? { requests.last?.timestamp }
-    var requestCount: Int { requests.count }
-    var totalPromptTokens: Int { requests.reduce(0) { $0 + $1.promptTokens } }
-    var totalCompletionTokens: Int { requests.reduce(0) { $0 + $1.completionTokens } }
-    var totalTokens: Int { totalPromptTokens + totalCompletionTokens }
-    var totalPromptCacheHitTokens: Int { requests.reduce(0) { $0 + ($1.promptCacheHitTokens ?? 0) } }
-    var totalPromptCacheMissTokens: Int { requests.reduce(0) { $0 + ($1.promptCacheMissTokens ?? 0) } }
-    var totalPromptCacheWriteTokens: Int { requests.reduce(0) { $0 + ($1.promptCacheWriteTokens ?? 0) } }
-    var cacheAccountingAvailable: Bool {
-        totalPromptCacheHitTokens > 0
-            || totalPromptCacheMissTokens > 0
-            || totalPromptCacheWriteTokens > 0
-    }
-    var cacheHitRate: Double? {
-        let total = totalPromptCacheHitTokens + totalPromptCacheMissTokens
-        guard total > 0 else { return nil }
-        return Double(totalPromptCacheHitTokens) / Double(total)
-    }
+    var startedAt: Date? { summary.startedAt }
+    var endedAt: Date? { summary.endedAt }
+    var requestCount: Int { summary.requestCount }
+    var totalPromptTokens: Int { summary.totalPromptTokens }
+    var totalCompletionTokens: Int { summary.totalCompletionTokens }
+    var totalTokens: Int { summary.totalTokens }
+    var totalPromptCacheHitTokens: Int { summary.totalPromptCacheHitTokens }
+    var totalPromptCacheMissTokens: Int { summary.totalPromptCacheMissTokens }
+    var totalPromptCacheWriteTokens: Int { summary.totalPromptCacheWriteTokens }
+    var cacheAccountingAvailable: Bool { summary.cacheAccountingAvailable }
+    var cacheHitRate: Double? { summary.cacheHitRate }
+    var totalTokensFormatted: String { summary.totalTokensFormatted }
+    var modelDistribution: [ModelCount] { summary.modelDistribution }
+    var p95Latency: TimeInterval? { summary.p95Latency }
 
-    var totalTokensFormatted: String {
-        if totalTokens >= 1_000_000 {
-            return String(format: "%.1fM", Double(totalTokens) / 1_000_000)
-        }
-        if totalTokens >= 1_000 {
-            return String(format: "%.1fK", Double(totalTokens) / 1_000)
-        }
-        return "\(totalTokens)"
-    }
-
-    var modelDistribution: [(model: String, count: Int)] {
-        Dictionary(grouping: requests, by: \.model)
-            .map { (model: $0.key, count: $0.value.count) }
-            .sorted {
-                if $0.count != $1.count { return $0.count > $1.count }
-                return $0.model < $1.model
-            }
-    }
-
-    var p95Latency: TimeInterval? {
-        percentile(requests.map(\.durationSeconds), percentile: 0.95)
+    init(id: String, source: String, requests: [ProxyPilotCore.RequestRecord]) {
+        self.id = id
+        self.source = source
+        self.requests = requests
+        self.summary = Self.makeSummary(for: requests)
     }
 
     static func build(from events: [SessionReportEvent]) -> [SessionHistorySession] {
@@ -65,7 +67,72 @@ struct SessionHistorySession: Identifiable, Equatable, Sendable {
             }
     }
 
-    private func percentile(_ values: [TimeInterval], percentile: Double) -> TimeInterval? {
+    private static func makeSummary(for requests: [ProxyPilotCore.RequestRecord]) -> Summary {
+        var startedAt: Date?
+        var endedAt: Date?
+        var totalPromptTokens = 0
+        var totalCompletionTokens = 0
+        var totalPromptCacheHitTokens = 0
+        var totalPromptCacheMissTokens = 0
+        var totalPromptCacheWriteTokens = 0
+        var modelCounts: [String: Int] = [:]
+        var durations: [TimeInterval] = []
+        durations.reserveCapacity(requests.count)
+
+        for request in requests {
+            if startedAt == nil {
+                startedAt = request.timestamp
+            }
+            endedAt = request.timestamp
+            totalPromptTokens += request.promptTokens
+            totalCompletionTokens += request.completionTokens
+            totalPromptCacheHitTokens += request.promptCacheHitTokens ?? 0
+            totalPromptCacheMissTokens += request.promptCacheMissTokens ?? 0
+            totalPromptCacheWriteTokens += request.promptCacheWriteTokens ?? 0
+            modelCounts[request.model, default: 0] += 1
+            durations.append(request.durationSeconds)
+        }
+
+        let totalTokens = totalPromptTokens + totalCompletionTokens
+        let cacheHitTotal = totalPromptCacheHitTokens + totalPromptCacheMissTokens
+        let cacheHitRate = cacheHitTotal > 0 ? Double(totalPromptCacheHitTokens) / Double(cacheHitTotal) : nil
+
+        return Summary(
+            startedAt: startedAt,
+            endedAt: endedAt,
+            requestCount: requests.count,
+            totalPromptTokens: totalPromptTokens,
+            totalCompletionTokens: totalCompletionTokens,
+            totalTokens: totalTokens,
+            totalPromptCacheHitTokens: totalPromptCacheHitTokens,
+            totalPromptCacheMissTokens: totalPromptCacheMissTokens,
+            totalPromptCacheWriteTokens: totalPromptCacheWriteTokens,
+            cacheAccountingAvailable: totalPromptCacheHitTokens > 0
+                || totalPromptCacheMissTokens > 0
+                || totalPromptCacheWriteTokens > 0,
+            cacheHitRate: cacheHitRate,
+            totalTokensFormatted: Self.formatTokens(totalTokens),
+            modelDistribution: modelCounts
+                .map { ModelCount(model: $0.key, count: $0.value) }
+                .sorted {
+                    if $0.count != $1.count { return $0.count > $1.count }
+                    return $0.model < $1.model
+                },
+            p95Latency: Self.percentile(durations, percentile: 0.95)
+        )
+    }
+
+    private static func formatTokens(_ totalTokens: Int) -> String {
+        if totalTokens >= 1_000_000 {
+            return String(format: "%.1fM", Double(totalTokens) / 1_000_000)
+        }
+        if totalTokens >= 1_000 {
+            return String(format: "%.1fK", Double(totalTokens) / 1_000)
+        }
+        return "\(totalTokens)"
+    }
+
+    private static func percentile(_ values: [TimeInterval], percentile: Double) -> TimeInterval? {
         guard !values.isEmpty else { return nil }
         let sorted = values.sorted()
         if sorted.count == 1 { return sorted[0] }

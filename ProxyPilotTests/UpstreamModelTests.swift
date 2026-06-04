@@ -108,7 +108,26 @@ final class UpstreamModelTests: XCTestCase {
             promptCacheMissTokens: 750_000
         ))
         XCTAssertEqual(cost, 0.3857, accuracy: 0.000001)
-        XCTAssertNil(model.estimatedCostUSD(promptTokens: 1_000_000, completionTokens: 1_000_000))
+    }
+
+    func testEstimatedCostUSDFallsBackToStandardPricingWhenCacheSplitMissing() throws {
+        // When cache pricing is configured but call-site lacks a hit/miss split,
+        // we fall back to standard prompt/completion pricing rather than returning nil.
+        // This keeps providers like DeepSeek priced when upstream reports only aggregate
+        // prompt token counts.
+        let model = UpstreamModel(
+            id: "m",
+            contextLength: nil,
+            promptPricePer1M: 0.14,
+            completionPricePer1M: 0.28,
+            promptCacheHitPricePer1M: 0.0028,
+            promptCacheMissPricePer1M: 0.14
+        )
+        let cost = try XCTUnwrap(model.estimatedCostUSD(
+            promptTokens: 1_000_000,
+            completionTokens: 1_000_000
+        ))
+        XCTAssertEqual(cost, 0.42, accuracy: 0.000001)
     }
 
     func testPricingPerMillionLabelFormatsPromptAndCompletion() {

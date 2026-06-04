@@ -34,7 +34,7 @@ struct AuthStatusCommand: AsyncParsableCommand {
 
             let statusPayload: ProviderAuthPayload
             var message: String
-            if upstreamProvider.requiresAPIKey, let secretKey = upstreamProvider.secretKey {
+            if let secretKey = upstreamProvider.secretKey {
                 let exists: Bool
                 do {
                     exists = try secrets.exists(key: secretKey)
@@ -50,7 +50,9 @@ struct AuthStatusCommand: AsyncParsableCommand {
                 }
 
                 let backend = authBackendInfo(for: secrets)
-                let statusText = exists ? "stored" : "not_set"
+                let statusText = exists
+                    ? "stored"
+                    : (upstreamProvider.requiresAPIKey ? "not_set" : "optional")
                 var verification: AuthVerificationOutcome?
                 if verify {
                     verification = await verifyCredential(
@@ -73,6 +75,9 @@ struct AuthStatusCommand: AsyncParsableCommand {
                     modelCount: verification?.modelCount
                 )
                 message = "\(upstreamProvider.rawValue): \(statusText) (\(backend.label))"
+                if !upstreamProvider.requiresAPIKey && !exists {
+                    message += "; optional endpoint key"
+                }
                 if let verification {
                     message += "; verification: \(verification.status)"
                     if let error = verification.errorMessage {
@@ -121,7 +126,7 @@ struct AuthStatusCommand: AsyncParsableCommand {
         let backend = authBackendInfo(for: secrets)
 
         for upstreamProvider in UpstreamProvider.allCases {
-            if upstreamProvider.requiresAPIKey, let secretKey = upstreamProvider.secretKey {
+            if let secretKey = upstreamProvider.secretKey {
                 let exists: Bool
                 do {
                     exists = try secrets.exists(key: secretKey)
@@ -136,7 +141,9 @@ struct AuthStatusCommand: AsyncParsableCommand {
                     throw ExitCode.failure
                 }
 
-                let statusText = exists ? "stored" : "not_set"
+                let statusText = exists
+                    ? "stored"
+                    : (upstreamProvider.requiresAPIKey ? "not_set" : "optional")
                 rows.append(ProviderAuthPayload(
                     provider: upstreamProvider.rawValue,
                     status: statusText,

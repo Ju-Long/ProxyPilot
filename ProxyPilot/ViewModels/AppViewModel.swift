@@ -64,6 +64,7 @@ final class AppViewModel: ObservableObject {
     static let keysProviderOrderDefaultsKey = "proxypilot.customization.keysProviderOrder"
     static let visibleKeysProvidersDefaultsKey = "proxypilot.customization.visibleKeysProviders"
     static let didMigrateQwenVisibleProviderDefaultsKey = "proxypilot.customization.didMigrateQwenVisibleProvider"
+    static let didMigrateNineRouterVisibleProviderDefaultsKey = "proxypilot.customization.didMigrateNineRouterVisibleProvider"
     static let copilotSidecarExpandedDefaultsKey = "proxypilot.customization.copilotSidecarExpanded"
     // autoRestartEnabled defaults key: kept here for resetToFreshInstall cleanup
     private static let autoRestartEnabledDefaultsKey = "proxypilot.autoRestartEnabled"
@@ -159,6 +160,10 @@ final class AppViewModel: ObservableObject {
     private var importedExternalSessionEventIDs: Set<UUID> = []
     private var importedExternalSessionIDs: Set<String> = []
     private var suppressedExternalSessionIDs: Set<String> = []
+    private var sessionReportImportGeneration = 0
+    private var sessionReportImportInFlight = false
+    private var sessionReportImportNeedsRetry = false
+    private var lastImportedSessionReportFingerprint: SessionReportImportFingerprint?
     private var hasTrackedFirstSuccessfulRequest = false
     private var hasEvaluatedKeychainPrimerThisLaunch = false
     private static let preflightExpandedDefaultsKey = "proxypilot.preflightExpanded"
@@ -168,17 +173,44 @@ final class AppViewModel: ObservableObject {
     private static let readmeURLString = "https://github.com/masterofthechaos/ProxyPilot-public/blob/main/README.md"
     static let defaultProxyURLString = "http://127.0.0.1:4000"
     static let refreshProxyStatusHelpText = "Refresh proxy status now. ProxyPilot also checks this automatically every 10 seconds while this window is open."
+    private static let activeCustomProviderIDDefaultsKey = "proxypilot.activeCustomProviderID"
+    private static let customProviderDefaultModelsKeyPrefix = "proxypilot.customProvider.defaultModels."
+    private static let customProviderModelCacheKeyPrefix = "proxypilot.customProvider.upstreamModelCache."
+    private static let customProviderXcodeAgentModelKeyPrefix = "proxypilot.customProvider.xcodeAgentModel."
+
+    private static func customProviderDefaultModelsKey(for id: UUID) -> String {
+        customProviderDefaultModelsKeyPrefix + id.uuidString
+    }
+
+    private static func customProviderModelCacheKey(for id: UUID) -> String {
+        customProviderModelCacheKeyPrefix + id.uuidString
+    }
+
+    private static func customProviderXcodeAgentModelKey(for id: UUID) -> String {
+        customProviderXcodeAgentModelKeyPrefix + id.uuidString
+    }
 
     @Published var proxyURLString: String = AppViewModel.defaultProxyURLString
 
     var upstreamAPIBaseURLString: String {
-        get { providerManager.upstreamAPIBaseURLString }
-        set { providerManager.upstreamAPIBaseURLString = newValue }
+        get { activeCustomProvider?.apiBaseURL ?? providerManager.upstreamAPIBaseURLString }
+        set {
+            if var provider = activeCustomProvider {
+                provider.apiBaseURL = newValue
+                customProviderStorage.update(provider)
+                objectWillChange.send()
+            } else {
+                providerManager.upstreamAPIBaseURLString = newValue
+            }
+        }
     }
 
     var upstreamProvider: UpstreamProvider {
         get { providerManager.upstreamProvider }
-        set { providerManager.upstreamProvider = newValue }
+        set {
+            setActiveCustomProviderID(nil)
+            providerManager.upstreamProvider = newValue
+        }
     }
 
     var miniMaxRoutingMode: MiniMaxRoutingMode {
@@ -188,7 +220,55 @@ final class AppViewModel: ObservableObject {
 
     // MARK: - Custom Providers
 
+    @Published private(set) var activeCustomProviderID: UUID?
+    @Published private var activeCustomUpstreamModels: [UpstreamModel] = []
+    @Published private var activeCustomSelectedUpstreamModels: Set<String> = []
+    @Published private var activeCustomXcodeAgentModel: String = ""
+
     var customProviders: [CustomProvider] { customProviderStorage.providers }
+    var activeCustomProvider: CustomProvider? {
+        guard let activeCustomProviderID else { return nil }
+        return customProviders.first { $0.id == activeCustomProviderID }
+    }
+    var hasActiveCustomProvider: Bool { activeCustomProvider != nil }
+    var selectedUpstreamSelection: UpstreamSelection {
+        get {
+            if let provider = activeCustomProvider {
+                return .custom(provider.id)
+            }
+            return .builtIn(upstreamProvider)
+        }
+        set {
+            switch newValue {
+            case .builtIn(let provider):
+                selectBuiltInUpstreamProvider(provider)
+            case .custom(let id):
+                guard let provider = customProviders.first(where: { $0.id == id }) else { return }
+                activateCustomProvider(provider)
+            }
+        }
+    }
+    var upstreamProviderDisplayTitle: String {
+        activeCustomProvider?.name ?? upstreamProvider.title
+    }
+    var selectedUpstreamProviderForNetworking: UpstreamProvider {
+        hasActiveCustomProvider ? .openAI : upstreamProvider
+    }
+    var selectedUpstreamRequiresAPIKey: Bool {
+        hasActiveCustomProvider || selectedUpstreamProviderForNetworking.requiresAPIKey
+    }
+    var selectedUpstreamIsPreview: Bool {
+        !hasActiveCustomProvider && upstreamProvider.isPreview
+    }
+    var selectedUpstreamUsesGoogleDirect: Bool {
+        !hasActiveCustomProvider && upstreamProvider == .google
+    }
+    var selectedUpstreamUsesMiniMaxRouting: Bool {
+        !hasActiveCustomProvider && upstreamProvider.isMiniMax
+    }
+    var selectedUpstreamUsesOpenRouterControls: Bool {
+        !hasActiveCustomProvider && upstreamProvider == .openRouter
+    }
 
     func addCustomProvider(name: String, apiBaseURL: String, apiKey: String) {
         let provider = CustomProvider(name: name, apiBaseURL: apiBaseURL)
@@ -197,6 +277,9 @@ final class AppViewModel: ObservableObject {
     }
 
     func deleteCustomProvider(_ provider: CustomProvider) {
+        if activeCustomProviderID == provider.id {
+            selectBuiltInUpstreamProvider(.zAI)
+        }
         customProviderStorage.delete(provider)
         objectWillChange.send()
     }
@@ -208,6 +291,23 @@ final class AppViewModel: ObservableObject {
 
     func customProviderHasKey(_ provider: CustomProvider) -> Bool {
         customProviderStorage.hasAPIKey(for: provider)
+    }
+
+    func isCustomProviderActive(_ provider: CustomProvider) -> Bool {
+        activeCustomProviderID == provider.id
+    }
+
+    func activateCustomProvider(_ provider: CustomProvider) {
+        setActiveCustomProviderID(provider.id)
+        runPreflightChecks(trackEvent: false)
+        objectWillChange.send()
+    }
+
+    func selectBuiltInUpstreamProvider(_ provider: UpstreamProvider) {
+        setActiveCustomProviderID(nil)
+        providerManager.upstreamProvider = provider
+        runPreflightChecks(trackEvent: false)
+        objectWillChange.send()
     }
 
     func saveCustomProviderKey(_ key: String, for provider: CustomProvider) {
@@ -244,7 +344,6 @@ final class AppViewModel: ObservableObject {
 
     @Published var launchAtLogin: Bool = false
     @Published private(set) var sessionHistorySessions: [SessionHistorySession] = []
-    @Published private(set) var sessionHistoryInputOutputRecords: [InputOutputLogRecord] = []
     @Published private(set) var sessionHistoryLoadError: String?
 
     var localProxyState: LocalProxyState { localProxyServer.state }
@@ -262,59 +361,71 @@ final class AppViewModel: ObservableObject {
         suppressedExternalSessionIDs.formUnion(importedExternalSessionIDs)
         importedExternalSessionEventIDs.removeAll()
         importedExternalSessionIDs.removeAll()
+        sessionReportImportGeneration &+= 1
+        sessionReportImportNeedsRetry = false
+        lastImportedSessionReportFingerprint = nil
     }
 
     func importExternalSessionReportEvents() {
-        guard let events = try? SessionReportStore.readEvents(from: sessionReportURL) else { return }
-        let latestGUIEventTimestamp = events
-            .filter { $0.source == "gui" }
-            .map(\.record.timestamp)
-            .max()
-        let externalEvents = events.filter { $0.source != "gui" && !suppressedExternalSessionIDs.contains($0.sessionID) }
-        guard let latestExternalEvent = externalEvents.max(by: {
-            $0.record.timestamp < $1.record.timestamp
-        }) else { return }
+        guard let fingerprint = currentSessionReportFingerprint() else { return }
+        guard fingerprint != lastImportedSessionReportFingerprint else { return }
 
-        if let latestGUIEventTimestamp,
-           latestExternalEvent.record.timestamp < latestGUIEventTimestamp {
+        if sessionReportImportInFlight {
+            sessionReportImportNeedsRetry = true
             return
         }
 
-        let latestSessionID = latestExternalEvent.sessionID
+        sessionReportImportInFlight = true
+        let generation = sessionReportImportGeneration
+        let sessionReportURL = sessionReportURL
 
-        for event in externalEvents where event.sessionID == latestSessionID && !importedExternalSessionEventIDs.contains(event.id) {
-            importedExternalSessionEventIDs.insert(event.id)
-            importedExternalSessionIDs.insert(event.sessionID)
-            localProxyServer.reportCard.record(event.record)
-            localProxyServer.state.sessionRequestCount = localProxyServer.reportCard.totalRequests
-            if !event.record.model.isEmpty {
-                localProxyServer.state.lastModelSeen = event.record.model
+        Task.detached(priority: .userInitiated) { [sessionReportURL, fingerprint] in
+            let events = try? SessionReportStore.readEvents(from: sessionReportURL)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.sessionReportImportInFlight = false
+                defer {
+                    if generation == self.sessionReportImportGeneration,
+                       self.sessionReportImportNeedsRetry {
+                        self.sessionReportImportNeedsRetry = false
+                        self.importExternalSessionReportEvents()
+                    } else if generation != self.sessionReportImportGeneration {
+                        self.sessionReportImportNeedsRetry = false
+                    }
+                }
+
+                guard generation == self.sessionReportImportGeneration else { return }
+                guard let events else { return }
+                self.lastImportedSessionReportFingerprint = fingerprint
+                self.applyExternalSessionReportEvents(events)
             }
         }
     }
 
     func refreshSessionHistory() async {
         do {
-            let events = try SessionReportStore.readEvents(from: sessionReportURL)
-            sessionHistorySessions = SessionHistorySession.build(from: events)
+            let sessionReportURL = sessionReportURL
+            let sessions = try await Task.detached(priority: .userInitiated) {
+                let events = try SessionReportStore.readEvents(from: sessionReportURL)
+                return SessionHistorySession.build(from: events)
+            }.value
+            sessionHistorySessions = sessions
             sessionHistoryLoadError = nil
         } catch {
             sessionHistorySessions = []
             sessionHistoryLoadError = error.localizedDescription
-        }
-
-        do {
-            sessionHistoryInputOutputRecords = try await inputOutputLoggingRecords()
-        } catch {
-            sessionHistoryInputOutputRecords = []
-            sessionHistoryLoadError = sessionHistoryLoadError ?? error.localizedDescription
         }
     }
 
     @Published var xcodeInstallations: [XcodeInstallation] = []
     var hasCompatibleXcode: Bool { xcodeInstallations.contains { $0.supportsAgenticCoding } }
 
-    var hasUpstreamKey: Bool { providerManager.hasUpstreamKey }
+    var hasUpstreamKey: Bool {
+        if let provider = activeCustomProvider {
+            return customProviderHasKey(provider)
+        }
+        return providerManager.hasUpstreamKey
+    }
     var hasMasterKey: Bool { KeychainService.exists(key: .litellmMasterKey) }
     var requiresMasterKey: Bool { !useBuiltInProxy || requireLocalAuth }
     var hasRequiredMasterKey: Bool { !requiresMasterKey || hasMasterKey }
@@ -440,6 +551,11 @@ final class AppViewModel: ObservableObject {
             decoded.insert(.qwen)
             defaults.set(true, forKey: didMigrateQwenVisibleProviderDefaultsKey)
         }
+        let didMigrateNineRouter = defaults.bool(forKey: didMigrateNineRouterVisibleProviderDefaultsKey)
+        if !didMigrateNineRouter && storedOrderRawValues?.contains(KeysProviderViewItem.nineRouter.rawValue) != true {
+            decoded.insert(.nineRouter)
+            defaults.set(true, forKey: didMigrateNineRouterVisibleProviderDefaultsKey)
+        }
         return decoded
     }
 
@@ -538,18 +654,39 @@ final class AppViewModel: ObservableObject {
     @Published var isRefreshingXcodeVisibleModels: Bool = false
 
     var upstreamModels: [UpstreamModel] {
-        get { providerManager.upstreamModels }
-        set { providerManager.upstreamModels = newValue }
+        get { hasActiveCustomProvider ? activeCustomUpstreamModels : providerManager.upstreamModels }
+        set {
+            if let id = activeCustomProviderID {
+                activeCustomUpstreamModels = newValue
+                cacheCustomUpstreamModels(newValue, providerID: id)
+            } else {
+                providerManager.upstreamModels = newValue
+            }
+        }
     }
 
     var selectedUpstreamModels: Set<String> {
-        get { providerManager.selectedUpstreamModels }
-        set { providerManager.selectedUpstreamModels = newValue }
+        get { hasActiveCustomProvider ? activeCustomSelectedUpstreamModels : providerManager.selectedUpstreamModels }
+        set {
+            if hasActiveCustomProvider {
+                activeCustomSelectedUpstreamModels = newValue
+                reconcileCustomXcodeAgentModelSelection()
+            } else {
+                providerManager.selectedUpstreamModels = newValue
+            }
+        }
     }
 
     var selectedXcodeAgentModel: String {
-        get { providerManager.selectedXcodeAgentModel }
-        set { providerManager.selectedXcodeAgentModel = newValue }
+        get { hasActiveCustomProvider ? activeCustomXcodeAgentModel : providerManager.selectedXcodeAgentModel }
+        set {
+            if let id = activeCustomProviderID {
+                activeCustomXcodeAgentModel = newValue
+                defaults.set(newValue, forKey: Self.customProviderXcodeAgentModelKey(for: id))
+            } else {
+                providerManager.selectedXcodeAgentModel = newValue
+            }
+        }
     }
 
     @Published var upstreamTestOutput: String = ""
@@ -610,6 +747,7 @@ final class AppViewModel: ObservableObject {
         defaults.removeObject(forKey: Self.keysProviderOrderDefaultsKey)
         defaults.removeObject(forKey: Self.visibleKeysProvidersDefaultsKey)
         defaults.removeObject(forKey: Self.didMigrateQwenVisibleProviderDefaultsKey)
+        defaults.removeObject(forKey: Self.didMigrateNineRouterVisibleProviderDefaultsKey)
         defaults.removeObject(forKey: Self.copilotSidecarExpandedDefaultsKey)
         defaults.removeObject(forKey: Self.autoRestartEnabledDefaultsKey)
         defaults.removeObject(forKey: Self.requireLocalAuthDefaultsKey)
@@ -622,6 +760,7 @@ final class AppViewModel: ObservableObject {
         defaults.removeObject(forKey: Self.anthropicFallbackDefaultsKey)
         defaults.removeObject(forKey: ProviderManager.xcodeAgentModelLegacyDefaultsKey)
         defaults.removeObject(forKey: Self.preflightExpandedDefaultsKey)
+        defaults.removeObject(forKey: Self.activeCustomProviderIDDefaultsKey)
 
         for provider in UpstreamProvider.allCases {
             defaults.removeObject(forKey: "proxypilot.upstreamAPIBaseURL.\(provider.rawValue)")
@@ -647,6 +786,7 @@ final class AppViewModel: ObservableObject {
 
         proxyURLString = Self.defaultProxyURLString
         useBuiltInProxy = true
+        setActiveCustomProviderID(nil)
         upstreamProvider = .zAI
         upstreamAPIBaseURLString = upstreamProvider.defaultAPIBaseURL
         upstreamModels = []
@@ -1079,6 +1219,18 @@ final class AppViewModel: ObservableObject {
         )
     }
 
+    var selectedPromptCachingConfiguration: PromptCachingConfiguration {
+        if hasActiveCustomProvider && promptCachingMode == .computeCacheHints {
+            return PromptCachingConfiguration(
+                isEnabled: true,
+                mode: .observeOnly,
+                retention: .providerDefault,
+                canonicalizeJSONForCache: false
+            )
+        }
+        return promptCachingConfiguration
+    }
+
     var promptCachingProviderStatusText: String {
         switch promptCachingMode {
         case .off:
@@ -1088,6 +1240,9 @@ final class AppViewModel: ObservableObject {
         case .explicitReferenceCache:
             return "Reference-cache objects are deferred; ProxyPilot will observe telemetry only."
         case .computeCacheHints:
+            if hasActiveCustomProvider {
+                return "Custom OpenAI-compatible providers are observed only; ProxyPilot does not mutate outbound cache fields."
+            }
             switch upstreamProvider {
             case .openAI, .mistral:
                 return "Auto sends a stable prompt_cache_key for OpenAI-compatible cache routing."
@@ -1123,6 +1278,9 @@ final class AppViewModel: ObservableObject {
         case .observeOnly:
             return "Caching observed"
         case .computeCacheHints:
+            if hasActiveCustomProvider {
+                return "Caching observed"
+            }
             if upstreamProvider == .google {
                 return "Caching guarded"
             }
@@ -1186,6 +1344,14 @@ final class AppViewModel: ObservableObject {
         }
         try await recorder.pruneExpired()
         return try await recorder.readRecords()
+    }
+
+    func inputOutputLoggingRecords(sessionID: String) async throws -> [InputOutputLogRecord] {
+        guard let recorder = try InputOutputLoggingRecorder.productionIfKeyExists(source: "gui") else {
+            return []
+        }
+        try await recorder.pruneExpired()
+        return try await recorder.readRecords(matchingSessionID: sessionID)
     }
 
     func deleteInputOutputLoggingRecords() async throws {
@@ -1383,7 +1549,7 @@ final class AppViewModel: ObservableObject {
     }
 
     var selectedUpstreamProviderDefaultAPIBaseURL: String {
-        providerManager.selectedUpstreamProviderDefaultAPIBaseURL
+        activeCustomProvider?.apiBaseURL ?? providerManager.selectedUpstreamProviderDefaultAPIBaseURL
     }
 
     var currentLogSourcePath: String {
@@ -1413,17 +1579,23 @@ final class AppViewModel: ObservableObject {
     }
 
     var xcodeAgentModelCandidates: [String] {
-        providerManager.xcodeAgentModelCandidates
+        if hasActiveCustomProvider {
+            return customXcodeAgentModelCandidates
+        }
+        return providerManager.xcodeAgentModelCandidates
     }
 
     var effectiveXcodeAgentModel: String {
-        providerManager.effectiveXcodeAgentModel
+        if hasActiveCustomProvider {
+            return effectiveCustomXcodeAgentModel
+        }
+        return providerManager.effectiveXcodeAgentModel
     }
 
     var xcodeAgentRoutingSummaryText: String {
         let model = effectiveXcodeAgentModel.trimmingCharacters(in: .whitespacesAndNewlines)
         if model.isEmpty {
-            return String(localized: "No model selected. Fetch or save a model for") + " \(upstreamProvider.title) " + String(localized: "before routing Xcode Agent traffic.")
+            return String(localized: "No model selected. Fetch or save a model for") + " \(upstreamProviderDisplayTitle) " + String(localized: "before routing Xcode Agent traffic.")
         }
         if hasPendingXcodeAgentModelChange {
             return String(localized: "Live route still uses") + " \(activeXcodeAgentModel). " + String(localized: "Selected model") + " \(model) " + String(localized: "is pending restart.")
@@ -1570,6 +1742,9 @@ final class AppViewModel: ObservableObject {
     }
 
     var cloudProviderActionDisclosureText: String {
+        if let provider = activeCustomProvider {
+            return "\(provider.name) is a custom OpenAI-compatible provider. Fetch Live Models calls \(provider.apiBaseURL)/models, and Test Upstream Response sends a minimal completion request that may consume credits or quota."
+        }
         if upstreamProvider.isLocal {
             return "\(upstreamProvider.title) is local/helper-backed. Fetching or testing checks a local endpoint and does not create cloud-provider billing from ProxyPilot."
         }
@@ -1624,7 +1799,7 @@ final class AppViewModel: ObservableObject {
             if isCopilotSidecarEndpointResponding { return "Responding on \(provider.defaultAPIBaseURL)" }
             if isCopilotSidecarAgentInstalled { return "Background helper installed; refresh or start to confirm endpoint response." }
             return "Helper not confirmed running."
-        case .ollama, .lmStudio:
+        case .nineRouter, .ollama, .lmStudio:
             guard let base = URL(string: provider.defaultAPIBaseURL) else {
                 return "Default URL could not be parsed."
             }
@@ -1644,6 +1819,8 @@ final class AppViewModel: ObservableObject {
             return "Start with `ollama serve`, then pull a model such as `ollama pull qwen2.5-coder:0.5b`."
         case .lmStudio:
             return "Open LM Studio, load a model, and start the Local Server with OpenAI-compatible mode enabled."
+        case .nineRouter:
+            return "Start 9Router, configure its dashboard providers, then use its local OpenAI-compatible endpoint."
         case .githubCopilot:
             return "Install or start the Copilot helper above; ProxyPilot uses your existing GitHub Copilot account."
         default:
@@ -1652,11 +1829,11 @@ final class AppViewModel: ObservableObject {
     }
 
     var proxySyncModelCandidates: [String] {
-        providerManager.proxySyncModelCandidates
+        hasActiveCustomProvider ? customProxySyncModelCandidates : providerManager.proxySyncModelCandidates
     }
 
     var canSyncProxyModels: Bool {
-        providerManager.canSyncProxyModels
+        !proxySyncModelCandidates.isEmpty
     }
 
     var sessionLatencySummary: SessionReportCard.LatencySummary? {
@@ -1901,61 +2078,229 @@ final class AppViewModel: ObservableObject {
     }
 
     var savedDefaultModels: [String] {
-        providerManager.savedDefaultModels
+        if hasActiveCustomProvider {
+            return customSavedDefaultModels
+        }
+        return providerManager.savedDefaultModels
     }
 
-    var hasSavedDefaultModels: Bool { providerManager.hasSavedDefaultModels }
+    var hasSavedDefaultModels: Bool { !savedDefaultModels.isEmpty }
 
     func saveSelectedModelsAsDefaults() {
-        providerManager.saveSelectedModelsAsDefaults()
+        if hasActiveCustomProvider {
+            saveSelectedCustomModelsAsDefaults()
+        } else {
+            providerManager.saveSelectedModelsAsDefaults()
+        }
     }
 
     var filteredUpstreamModels: [UpstreamModel] {
-        providerManager.filteredUpstreamModels
+        hasActiveCustomProvider ? activeCustomUpstreamModels : providerManager.filteredUpstreamModels
     }
 
     var modelSelectionRows: [ProviderManager.ModelSelectionRow] {
-        providerManager.modelSelectionRows
+        if hasActiveCustomProvider {
+            return customModelSelectionRows
+        }
+        return providerManager.modelSelectionRows
     }
 
     var selectedModelRowCount: Int {
-        providerManager.selectedModelRowCount
+        modelSelectionRows.filter { isModelSelected($0.id) }.count
     }
 
     var allVisibleModelsSelected: Bool {
-        providerManager.allVisibleModelsSelected
+        let rows = modelSelectionRows
+        return !rows.isEmpty && rows.allSatisfy { isModelSelected($0.id) }
     }
 
     var canClearModelSelection: Bool {
-        providerManager.canClearModelSelection
+        selectedUpstreamModels.contains(where: { !isDefaultModel($0) })
     }
 
     var canSaveSelectedModelsAsDefaults: Bool {
-        providerManager.canSaveSelectedModelsAsDefaults
+        modelSelectionRows.contains { row in
+            !row.isDefault && isModelSelected(row.id)
+        }
     }
 
     func selectAllUpstreamModels() {
-        providerManager.selectAllUpstreamModels()
+        if hasActiveCustomProvider {
+            activeCustomSelectedUpstreamModels.formUnion(modelSelectionRows.map(\.id))
+            reconcileCustomXcodeAgentModelSelection()
+        } else {
+            providerManager.selectAllUpstreamModels()
+        }
     }
 
     func clearUpstreamModelSelection() {
-        providerManager.clearUpstreamModelSelection()
+        if hasActiveCustomProvider {
+            activeCustomSelectedUpstreamModels = []
+            reconcileCustomXcodeAgentModelSelection()
+        } else {
+            providerManager.clearUpstreamModelSelection()
+        }
     }
 
     func isDefaultModel(_ id: String) -> Bool {
-        providerManager.isDefaultModel(id)
+        if hasActiveCustomProvider {
+            return Set(customSavedDefaultModels).contains(id)
+        }
+        return providerManager.isDefaultModel(id)
     }
 
     func isModelSelected(_ id: String) -> Bool {
-        providerManager.isModelSelected(id)
+        if hasActiveCustomProvider {
+            return isDefaultModel(id) || activeCustomSelectedUpstreamModels.contains(id)
+        }
+        return providerManager.isModelSelected(id)
     }
 
     func setModelSelected(_ id: String, isSelected: Bool) {
-        providerManager.setModelSelected(id, isSelected: isSelected)
+        if hasActiveCustomProvider {
+            if isDefaultModel(id) {
+                activeCustomSelectedUpstreamModels.insert(id)
+            } else if isSelected {
+                activeCustomSelectedUpstreamModels.insert(id)
+            } else {
+                activeCustomSelectedUpstreamModels.remove(id)
+            }
+            reconcileCustomXcodeAgentModelSelection()
+        } else {
+            providerManager.setModelSelected(id, isSelected: isSelected)
+        }
     }
 
     func removeDefaultModel(_ id: String) {
-        providerManager.removeDefaultModel(id)
+        if let providerID = activeCustomProviderID {
+            let models = customSavedDefaultModels.filter { $0 != id }
+            defaults.set(models, forKey: Self.customProviderDefaultModelsKey(for: providerID))
+            activeCustomSelectedUpstreamModels.remove(id)
+            reconcileCustomXcodeAgentModelSelection()
+            objectWillChange.send()
+        } else {
+            providerManager.removeDefaultModel(id)
+        }
+    }
+
+    private var customSavedDefaultModels: [String] {
+        guard let providerID = activeCustomProviderID else { return [] }
+        return defaults.stringArray(forKey: Self.customProviderDefaultModelsKey(for: providerID)) ?? []
+    }
+
+    private var customSavedDefaultModelSet: Set<String> {
+        Set(customSavedDefaultModels)
+    }
+
+    private var customXcodeAgentModelCandidates: [String] {
+        let selected = activeCustomSelectedUpstreamModels.sorted()
+        var candidates: [String]
+        if !selected.isEmpty {
+            candidates = selected
+        } else if !activeCustomUpstreamModels.isEmpty {
+            candidates = activeCustomUpstreamModels.map(\.id).sorted()
+        } else {
+            candidates = customSavedDefaultModels
+        }
+
+        let trimmedSelection = activeCustomXcodeAgentModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSelection.isEmpty,
+           !candidates.contains(where: { $0.caseInsensitiveCompare(trimmedSelection) == .orderedSame }) {
+            candidates.insert(trimmedSelection, at: 0)
+        }
+        return candidates
+    }
+
+    private var effectiveCustomXcodeAgentModel: String {
+        let candidates = customXcodeAgentModelCandidates
+        if candidates.contains(activeCustomXcodeAgentModel) {
+            return activeCustomXcodeAgentModel
+        }
+        return candidates.sorted().first ?? customSavedDefaultModels.first ?? ""
+    }
+
+    private var customProxySyncModelCandidates: [String] {
+        if !activeCustomUpstreamModels.isEmpty {
+            var candidates = Set(activeCustomUpstreamModels.map(\.id).filter { isModelSelected($0) })
+            candidates.formUnion(customSavedDefaultModelSet)
+            return candidates.sorted()
+        }
+
+        var candidates = customSavedDefaultModelSet
+        let selected = activeCustomXcodeAgentModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty {
+            candidates.insert(selected)
+        }
+        return candidates.sorted()
+    }
+
+    private var customModelSelectionRows: [ProviderManager.ModelSelectionRow] {
+        let liveRows = activeCustomUpstreamModels.map { model in
+            ProviderManager.ModelSelectionRow(
+                id: model.id,
+                model: model,
+                isDefault: isDefaultModel(model.id),
+                isLive: true
+            )
+        }
+        let liveIDs = Set(liveRows.map(\.id))
+        let missingDefaultRows = customSavedDefaultModels
+            .filter { !liveIDs.contains($0) }
+            .map {
+                ProviderManager.ModelSelectionRow(
+                    id: $0,
+                    model: customUpstreamModel(for: $0),
+                    isDefault: true,
+                    isLive: false
+                )
+            }
+        return missingDefaultRows + liveRows
+    }
+
+    private func customUpstreamModel(for id: String) -> UpstreamModel? {
+        if let direct = activeCustomUpstreamModels.first(where: { $0.id == id }) {
+            return direct
+        }
+        let lower = id.lowercased()
+        return activeCustomUpstreamModels.first { $0.id.lowercased() == lower }
+    }
+
+    private func saveSelectedCustomModelsAsDefaults() {
+        guard let providerID = activeCustomProviderID else { return }
+        let selectedVisibleModels = Set(modelSelectionRows.map(\.id).filter { id in
+            !isDefaultModel(id) && isModelSelected(id)
+        })
+        let models = Array(customSavedDefaultModelSet.union(selectedVisibleModels)).sorted()
+        defaults.set(models, forKey: Self.customProviderDefaultModelsKey(for: providerID))
+        activeCustomSelectedUpstreamModels.formUnion(models)
+        objectWillChange.send()
+    }
+
+    private func cacheCustomUpstreamModels(_ models: [UpstreamModel], providerID: UUID) {
+        guard let data = try? JSONEncoder().encode(models) else { return }
+        defaults.set(data, forKey: Self.customProviderModelCacheKey(for: providerID))
+    }
+
+    private static func cachedCustomUpstreamModels(from defaults: UserDefaults, providerID: UUID) -> [UpstreamModel] {
+        guard let data = defaults.data(forKey: customProviderModelCacheKey(for: providerID)),
+              let models = try? JSONDecoder().decode([UpstreamModel].self, from: data) else {
+            return []
+        }
+        return models
+    }
+
+    private func applyFetchedCustomUpstreamModels(_ models: [UpstreamModel], providerID: UUID) {
+        activeCustomUpstreamModels = models
+        cacheCustomUpstreamModels(models, providerID: providerID)
+        activeCustomSelectedUpstreamModels.formUnion(customSavedDefaultModelSet)
+        reconcileCustomXcodeAgentModelSelection()
+    }
+
+    private func reconcileCustomXcodeAgentModelSelection() {
+        let candidates = customXcodeAgentModelCandidates
+        if !candidates.contains(activeCustomXcodeAgentModel) {
+            selectedXcodeAgentModel = candidates.sorted().first ?? customSavedDefaultModels.first ?? ""
+        }
     }
 
     var checklistIsProxyURLValid: Bool {
@@ -2034,6 +2379,14 @@ final class AppViewModel: ObservableObject {
         promptCachingMode = PromptCachingMode(
             rawValue: defaults.string(forKey: Self.promptCachingModeDefaultsKey) ?? ""
         ) ?? .computeCacheHints
+        if let rawActiveCustomProviderID = defaults.string(forKey: Self.activeCustomProviderIDDefaultsKey),
+           let activeCustomProviderID = UUID(uuidString: rawActiveCustomProviderID) {
+            if customProviderStorage.providers.contains(where: { $0.id == activeCustomProviderID }) {
+                setActiveCustomProviderID(activeCustomProviderID)
+            } else {
+                defaults.removeObject(forKey: Self.activeCustomProviderIDDefaultsKey)
+            }
+        }
         reconcileStoredInputOutputLoggingState()
         persistSharedInputOutputLoggingPreferences()
         appearancePreference = AppAppearancePreference(
@@ -2275,6 +2628,52 @@ final class AppViewModel: ObservableObject {
         proxyLifecycle.startHealthMonitor()
     }
 
+    private struct SessionReportImportFingerprint: Sendable, Equatable {
+        let fileSize: Int64?
+        let modificationDate: Date?
+    }
+
+    private func currentSessionReportFingerprint() -> SessionReportImportFingerprint? {
+        guard FileManager.default.fileExists(atPath: sessionReportURL.path) else { return nil }
+        guard let resourceValues = try? sessionReportURL.resourceValues(forKeys: [
+            .fileSizeKey,
+            .contentModificationDateKey
+        ]) else { return nil }
+
+        return SessionReportImportFingerprint(
+            fileSize: resourceValues.fileSize.map(Int64.init),
+            modificationDate: resourceValues.contentModificationDate
+        )
+    }
+
+    private func applyExternalSessionReportEvents(_ events: [SessionReportEvent]) {
+        let latestGUIEventTimestamp = events
+            .filter { $0.source == "gui" }
+            .map(\.record.timestamp)
+            .max()
+        let externalEvents = events.filter { $0.source != "gui" && !suppressedExternalSessionIDs.contains($0.sessionID) }
+        guard let latestExternalEvent = externalEvents.max(by: {
+            $0.record.timestamp < $1.record.timestamp
+        }) else { return }
+
+        if let latestGUIEventTimestamp,
+           latestExternalEvent.record.timestamp < latestGUIEventTimestamp {
+            return
+        }
+
+        let latestSessionID = latestExternalEvent.sessionID
+
+        for event in externalEvents where event.sessionID == latestSessionID && !importedExternalSessionEventIDs.contains(event.id) {
+            importedExternalSessionEventIDs.insert(event.id)
+            importedExternalSessionIDs.insert(event.sessionID)
+            localProxyServer.reportCard.record(event.record)
+            localProxyServer.state.sessionRequestCount = localProxyServer.reportCard.totalRequests
+            if !event.record.model.isEmpty {
+                localProxyServer.state.lastModelSeen = event.record.model
+            }
+        }
+    }
+
     func stopLogUpdates() {
         logRefreshTimer?.invalidate()
         logRefreshTimer = nil
@@ -2283,9 +2682,35 @@ final class AppViewModel: ObservableObject {
         proxyLifecycle.stopHealthMonitor()
     }
 
+    private func setActiveCustomProviderID(_ id: UUID?) {
+        activeCustomProviderID = id
+        if let id {
+            defaults.set(id.uuidString, forKey: Self.activeCustomProviderIDDefaultsKey)
+            activeCustomUpstreamModels = Self.cachedCustomUpstreamModels(from: defaults, providerID: id)
+            activeCustomSelectedUpstreamModels = Set(customSavedDefaultModels)
+            activeCustomXcodeAgentModel = defaults.string(forKey: Self.customProviderXcodeAgentModelKey(for: id)) ?? ""
+            reconcileCustomXcodeAgentModelSelection()
+        } else {
+            defaults.removeObject(forKey: Self.activeCustomProviderIDDefaultsKey)
+            activeCustomUpstreamModels = []
+            activeCustomSelectedUpstreamModels = []
+            activeCustomXcodeAgentModel = ""
+        }
+    }
+
+    private func selectedUpstreamAPIKey() -> String? {
+        if let provider = activeCustomProvider {
+            return customProviderStorage.apiKey(for: provider)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let keychainKey = selectedUpstreamProviderForNetworking.keychainKey else { return nil }
+        return KeychainService.get(key: keychainKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func saveUpstreamKey() {
-        guard let keychainKey = upstreamProvider.keychainKey else { return }
-        if case let .failure(_, message) = APIKeyValidator.validate(upstreamKeyDraft, for: upstreamProvider) {
+        let provider = selectedUpstreamProviderForNetworking
+        if case let .failure(_, message) = APIKeyValidator.validate(upstreamKeyDraft, for: provider) {
             applyIssue(AppIssue(
                 code: .missingUpstreamKey,
                 title: String(localized: "Invalid API Key"),
@@ -2295,7 +2720,13 @@ final class AppViewModel: ObservableObject {
             return
         }
         do {
-            try KeychainService.set(upstreamKeyDraft, forKey: keychainKey)
+            if let customProvider = activeCustomProvider {
+                try KeychainService.set(upstreamKeyDraft, forAccount: customProvider.keychainAccountName)
+            } else if let keychainKey = provider.keychainKey {
+                try KeychainService.set(upstreamKeyDraft, forKey: keychainKey)
+            } else {
+                return
+            }
             upstreamKeyDraft = ""
             showingUpstreamKeyField = false
             clearIssue()
@@ -2311,9 +2742,14 @@ final class AppViewModel: ObservableObject {
     }
 
     func deleteUpstreamKey() {
-        guard let keychainKey = upstreamProvider.keychainKey else { return }
         do {
-            try KeychainService.delete(key: keychainKey)
+            if let customProvider = activeCustomProvider {
+                try KeychainService.delete(account: customProvider.keychainAccountName)
+            } else if let keychainKey = selectedUpstreamProviderForNetworking.keychainKey {
+                try KeychainService.delete(key: keychainKey)
+            } else {
+                return
+            }
             clearIssue()
             objectWillChange.send()
         } catch {
@@ -2424,11 +2860,12 @@ final class AppViewModel: ObservableObject {
     }
 
     func runPreflightChecks(trackEvent: Bool = true) {
+        let provider = selectedUpstreamProviderForNetworking
         let context = PreflightContext(
             proxyURLString: proxyURLString,
             useBuiltInProxy: useBuiltInProxy,
             requireLocalAuth: requireLocalAuth,
-            upstreamProvider: upstreamProvider,
+            upstreamProvider: provider,
             upstreamAPIBaseURLString: upstreamAPIBaseURLString,
             fallbackUpstreamBaseURLString: selectedUpstreamProviderDefaultAPIBaseURL,
             hasMasterKey: hasMasterKey,
@@ -2453,7 +2890,7 @@ final class AppViewModel: ObservableObject {
                     checks: checks,
                     useBuiltInProxy: useBuiltInProxy,
                     requireLocalAuth: requireLocalAuth,
-                    upstreamProvider: upstreamProvider
+                    upstreamProvider: provider
                 ),
                 telemetryOptIn: telemetryOptIn
             )
@@ -2650,6 +3087,8 @@ final class AppViewModel: ObservableObject {
 
     func fetchUpstreamModels() async {
         clearIssue()
+        let provider = selectedUpstreamProviderForNetworking
+        let customProviderID = activeCustomProviderID
 
         let apiBase: URL
         do {
@@ -2665,9 +3104,8 @@ final class AppViewModel: ObservableObject {
         }
 
         let apiKey: String
-        if upstreamProvider.requiresAPIKey {
-            guard let keychainKey = upstreamProvider.keychainKey,
-                  let key = KeychainService.get(key: keychainKey), !key.isEmpty else {
+        if selectedUpstreamRequiresAPIKey {
+            guard let key = selectedUpstreamAPIKey(), !key.isEmpty else {
                 applyIssue(AppIssue(
                     code: .missingUpstreamKey,
                     title: String(localized: "Upstream API Key Missing"),
@@ -2685,10 +3123,16 @@ final class AppViewModel: ObservableObject {
             let models = try await proxyService.fetchUpstreamModels(
                 apiBase: apiBase,
                 apiKey: apiKey,
-                provider: upstreamProvider
+                provider: provider
             )
-            providerManager.applyFetchedUpstreamModels(models)
-            providerManager.reconcileXcodeAgentModelSelection()
+            if let customProviderID {
+                guard activeCustomProviderID == customProviderID else { return }
+                applyFetchedCustomUpstreamModels(models, providerID: customProviderID)
+            } else {
+                guard selectedUpstreamProviderForNetworking == provider else { return }
+                providerManager.applyFetchedUpstreamModels(models)
+                providerManager.reconcileXcodeAgentModelSelection()
+            }
             markFirstSuccessfulRequestIfNeeded()
         } catch {
             let issue = upstreamIssueFor(
@@ -2696,24 +3140,30 @@ final class AppViewModel: ObservableObject {
                 fallbackCode: .generic,
                 fallbackTitle: String(localized: "Upstream Model Fetch Failed"),
                 fallbackActions: upstreamFallbackActions,
-                provider: upstreamProvider,
+                provider: provider,
                 apiBase: apiBase,
-                path: upstreamProvider.modelsPath,
+                path: provider.modelsPath,
                 operation: .modelFetch
             )
             applyIssue(issue)
-            trackProviderEndpointFailure(provider: upstreamProvider, operation: .modelFetch, issue: issue)
+            trackProviderEndpointFailure(provider: provider, operation: .modelFetch, issue: issue)
         }
     }
 
     func hydrateCurrentProviderModelCacheIfNeeded() async {
         guard upstreamModels.isEmpty else { return }
-        let provider = upstreamProvider
-        guard provider.requiresAPIKey,
-              let keychainKey = provider.keychainKey,
-              let apiKey = KeychainService.get(key: keychainKey),
-              !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let apiBase = providerManager.upstreamAPIBaseURL(for: provider) else {
+        let provider = selectedUpstreamProviderForNetworking
+        let customProviderID = activeCustomProviderID
+        guard selectedUpstreamRequiresAPIKey,
+              let apiKey = selectedUpstreamAPIKey(),
+              !apiKey.isEmpty else {
+            return
+        }
+
+        let apiBase: URL
+        do {
+            apiBase = try validatedUpstreamBaseURL()
+        } catch {
             return
         }
 
@@ -2723,9 +3173,14 @@ final class AppViewModel: ObservableObject {
                 apiKey: apiKey,
                 provider: provider
             )
-            guard upstreamProvider == provider, upstreamModels.isEmpty else { return }
-            providerManager.applyFetchedUpstreamModels(models)
-            providerManager.reconcileXcodeAgentModelSelection()
+            guard selectedUpstreamProviderForNetworking == provider, upstreamModels.isEmpty else { return }
+            if let customProviderID {
+                guard activeCustomProviderID == customProviderID else { return }
+                applyFetchedCustomUpstreamModels(models, providerID: customProviderID)
+            } else {
+                providerManager.applyFetchedUpstreamModels(models)
+                providerManager.reconcileXcodeAgentModelSelection()
+            }
         } catch {
             // Pricing cache hydration is opportunistic; explicit Fetch Live Models remains user-visible.
         }
@@ -2744,7 +3199,7 @@ final class AppViewModel: ObservableObject {
             return
         }
 
-        providerManager.reconcileXcodeAgentModelSelection()
+        reconcileXcodeAgentModelSelection()
 
         if useBuiltInProxy {
             await proxyLifecycle.restartProxy()
@@ -2769,6 +3224,7 @@ final class AppViewModel: ObservableObject {
         clearIssue()
         upstreamTestOutput = ""
         upstreamTestModelUsed = ""
+        let provider = selectedUpstreamProviderForNetworking
 
         let apiBase: URL
         do {
@@ -2784,9 +3240,8 @@ final class AppViewModel: ObservableObject {
         }
 
         let apiKey: String
-        if upstreamProvider.requiresAPIKey {
-            guard let keychainKey = upstreamProvider.keychainKey,
-                  let key = KeychainService.get(key: keychainKey), !key.isEmpty else {
+        if selectedUpstreamRequiresAPIKey {
+            guard let key = selectedUpstreamAPIKey(), !key.isEmpty else {
                 applyIssue(AppIssue(
                     code: .missingUpstreamKey,
                     title: String(localized: "Upstream API Key Missing"),
@@ -2807,7 +3262,7 @@ final class AppViewModel: ObservableObject {
                 apiBase: apiBase,
                 apiKey: apiKey,
                 model: model,
-                provider: upstreamProvider
+                provider: provider
             )
             upstreamTestModelUsed = model
             upstreamTestOutput = text.isEmpty ? "(empty response)" : text
@@ -2818,13 +3273,13 @@ final class AppViewModel: ObservableObject {
                 fallbackCode: .generic,
                 fallbackTitle: String(localized: "Upstream Test Failed"),
                 fallbackActions: upstreamFallbackActions,
-                provider: upstreamProvider,
+                provider: provider,
                 apiBase: apiBase,
-                path: upstreamProvider.chatCompletionsPath,
+                path: provider.chatCompletionsPath,
                 operation: .upstreamTest
             )
             applyIssue(issue)
-            trackProviderEndpointFailure(provider: upstreamProvider, operation: .upstreamTest, issue: issue)
+            trackProviderEndpointFailure(provider: provider, operation: .upstreamTest, issue: issue)
         }
     }
 
@@ -2833,7 +3288,11 @@ final class AppViewModel: ObservableObject {
     }
 
     func resetUpstreamAPIBaseURL() {
-        providerManager.resetUpstreamAPIBaseURL()
+        if let provider = activeCustomProvider {
+            upstreamAPIBaseURLString = provider.apiBaseURL
+        } else {
+            providerManager.resetUpstreamAPIBaseURL()
+        }
     }
 
     func exportDiagnostics() {
@@ -3029,7 +3488,7 @@ final class AppViewModel: ObservableObject {
 
         Quick context:
         - App version: v\(version) (\(build))
-        - Upstream provider: \(upstreamProvider.title)
+        - Upstream provider: \(upstreamProviderDisplayTitle)
         - Upstream base URL: \(upstreamAPIBaseURLString)
         - Proxy running: \(isRunning ? "Yes" : "No")
 
@@ -3391,11 +3850,12 @@ general_settings:
     }
 
     private func pendingProxyModelIDs() -> [String] {
+        let provider = selectedUpstreamProviderForNetworking
         var ids: Set<String> = []
-        ids.formUnion(upstreamProvider == .githubCopilot ? proxySyncModelCandidates : Array(selectedUpstreamModels))
+        ids.formUnion(provider == .githubCopilot ? proxySyncModelCandidates : Array(selectedUpstreamModels))
         ids.formUnion(upstreamModels.map(\.id))
         ids.formUnion(savedDefaultModels)
-        if let fallback = upstreamProvider.fallbackModelIDs {
+        if let fallback = provider.fallbackModelIDs {
             ids.formUnion(fallback)
         }
         let preferred = effectiveXcodeAgentModel.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3421,6 +3881,7 @@ general_settings:
     /// Builds a `LocalProxyServer.Config` from current AppViewModel state.
     /// Called by `ProxyLifecycleManager` via the `builtInProxyConfigBuilder` closure.
     func buildBuiltInProxyConfig() throws -> LocalProxyServer.Config {
+        let provider = selectedUpstreamProviderForNetworking
         let proxy = try validatedProxyURL(requireLocalhost: true)
 
         guard let port = UInt16(exactly: proxy.port), (1...65535).contains(proxy.port) else {
@@ -3449,20 +3910,13 @@ general_settings:
             masterKey = "proxypilot-local-noauth"
         }
 
-        let upstreamKey: String? = {
-            guard let keychainKey = upstreamProvider.keychainKey else { return nil }
-            let value = KeychainService.get(key: keychainKey)
-            if let value, !value.isEmpty {
-                return value
-            }
-            return nil
-        }()
+        let upstreamKey = selectedUpstreamAPIKey()
 
         var allowedModels: Set<String> = {
-            if upstreamProvider == .githubCopilot { return Set(proxySyncModelCandidates) }
+            if provider == .githubCopilot { return Set(proxySyncModelCandidates) }
             if !selectedUpstreamModels.isEmpty { return selectedUpstreamModels }
             if !upstreamModels.isEmpty { return Set(upstreamModels.map(\.id)) }
-            if let fallback = upstreamProvider.fallbackModelIDs { return Set(fallback) }
+            if let fallback = provider.fallbackModelIDs { return Set(fallback) }
             return Set(savedDefaultModels)
         }()
         let preferredModel = effectiveXcodeAgentModel.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3487,7 +3941,7 @@ general_settings:
             port: port,
             sessionID: sessionID,
             masterKey: masterKey,
-            upstreamProvider: upstreamProvider,
+            upstreamProvider: provider,
             upstreamAPIBase: upstreamBase,
             upstreamAPIKey: upstreamKey,
             allowedModels: allowedModels,
@@ -3495,14 +3949,14 @@ general_settings:
             anthropicTranslatorMode: anthropicTranslatorFallbackEnabled ? .legacyFallback : .hardened,
             miniMaxRoutingMode: providerManager.miniMaxRoutingMode,
             preferredAnthropicUpstreamModel: preferredModel.isEmpty
-                ? providerManager.preferredXcodeAgentModel(from: savedDefaultModels)
+                ? preferredXcodeAgentModel(from: savedDefaultModels)
                 : preferredModel,
-            googleThoughtSignatureStore: upstreamProvider == .google ? GoogleThoughtSignatureStore() : nil,
+            googleThoughtSignatureStore: provider == .google ? GoogleThoughtSignatureStore() : nil,
             inputOutputLogger: try? InputOutputLoggingRecorder.productionIfConfigured(source: "gui", sessionID: sessionID),
-            promptCaching: promptCachingConfiguration
+            promptCaching: selectedPromptCachingConfiguration
         )
 
-        if upstreamKey == nil && upstreamProvider.requiresAPIKey {
+        if upstreamKey == nil && selectedUpstreamRequiresAPIKey {
             applyIssue(AppIssue(
                 code: .missingUpstreamKey,
                 title: String(localized: "Proxy Started Without Upstream Key"),
@@ -3515,11 +3969,22 @@ general_settings:
     }
 
     func reconcileXcodeAgentModelSelection() {
-        providerManager.reconcileXcodeAgentModelSelection()
+        if hasActiveCustomProvider {
+            reconcileCustomXcodeAgentModelSelection()
+        } else {
+            providerManager.reconcileXcodeAgentModelSelection()
+        }
     }
 
     func upstreamModel(for id: String) -> UpstreamModel? {
-        providerManager.upstreamModel(for: id)
+        hasActiveCustomProvider ? customUpstreamModel(for: id) : providerManager.upstreamModel(for: id)
+    }
+
+    private func preferredXcodeAgentModel(from models: [String]) -> String {
+        if hasActiveCustomProvider {
+            return models.sorted().first ?? ""
+        }
+        return providerManager.preferredXcodeAgentModel(from: models)
     }
 
     private static func csvEscaped(_ value: String) -> String {
@@ -3566,13 +4031,16 @@ general_settings:
         operation: UpstreamIssueOperation,
         issue: AppIssue?
     ) {
+        let activeEndpoint = hasActiveCustomProvider
+            ? proxyService.normalizedUpstreamAPIBase(from: upstreamAPIBaseURLString)
+            : providerManager.upstreamAPIBaseURL(for: provider)
         telemetryService.track(
             name: "provider_endpoint_failed",
             payload: Self.telemetryPayloadForProviderEndpointFailure(
                 provider: provider,
                 operation: operation,
                 issue: issue,
-                usesDefaultEndpoint: providerManager.upstreamAPIBaseURL(for: provider)?.absoluteString == provider.defaultAPIBaseURL
+                usesDefaultEndpoint: activeEndpoint?.absoluteString == provider.defaultAPIBaseURL
             ),
             telemetryOptIn: telemetryOptIn
         )
@@ -3735,7 +4203,7 @@ general_settings:
     }
 
     private var upstreamFallbackActions: [AppIssue.Action] {
-        if upstreamProvider.requiresAPIKey {
+        if selectedUpstreamRequiresAPIKey {
             return [.openUpstreamKeyEditor, .resetUpstreamURL, .exportDiagnostics]
         }
         return [.resetUpstreamURL, .exportDiagnostics]
@@ -3844,6 +4312,8 @@ general_settings:
             return String(localized: "Start Ollama with ollama serve, check the base URL, or pull a model locally.")
         case .githubCopilot:
             return String(localized: "Sign in with the Copilot or GitHub CLI, confirm the account has Copilot access, then start or reinstall the helper.")
+        case .nineRouter:
+            return String(localized: "Start 9Router, confirm its dashboard is configured, or change the base URL.")
         default:
             return String(localized: "Check the local provider and base URL.")
         }

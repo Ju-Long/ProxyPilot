@@ -14,6 +14,7 @@ public enum UpstreamProvider: String, CaseIterable, Identifiable, Sendable {
     case miniMax    = "minimax"
     case miniMaxCN  = "minimax-cn"
     case qwen       = "qwen"
+    case nineRouter = "9router"
     case githubCopilot = "github-copilot"
     case ollama     = "ollama"
     case lmStudio   = "lmstudio"
@@ -34,6 +35,7 @@ public enum UpstreamProvider: String, CaseIterable, Identifiable, Sendable {
         case .miniMax:    return "MiniMax"
         case .miniMaxCN:  return "MiniMax CN"
         case .qwen:       return "Qwen"
+        case .nineRouter: return "9Router"
         case .githubCopilot: return "GitHub Copilot"
         case .ollama:     return "Ollama"
         case .lmStudio:   return "LM Studio"
@@ -54,6 +56,7 @@ public enum UpstreamProvider: String, CaseIterable, Identifiable, Sendable {
         case .miniMax:    return "https://api.minimax.io/v1"
         case .miniMaxCN:  return "https://api.minimaxi.com/v1"
         case .qwen:       return "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        case .nineRouter: return "http://localhost:20128/v1"
         case .githubCopilot: return "http://127.0.0.1:8080/v1"
         case .ollama:     return "http://localhost:11434/v1"
         case .lmStudio:   return "http://localhost:1234/v1"
@@ -215,7 +218,7 @@ public enum UpstreamProvider: String, CaseIterable, Identifiable, Sendable {
     /// Whether this provider runs on the local machine (no cloud API).
     public var isLocal: Bool {
         switch self {
-        case .githubCopilot, .ollama, .lmStudio: return true
+        case .nineRouter, .githubCopilot, .ollama, .lmStudio: return true
         default: return false
         }
     }
@@ -237,6 +240,7 @@ public enum UpstreamProvider: String, CaseIterable, Identifiable, Sendable {
         case .miniMax:    return SecretKey.minimaxAPIKey
         case .miniMaxCN:  return SecretKey.minimaxCNAPIKey
         case .qwen:       return SecretKey.qwenAPIKey
+        case .nineRouter: return SecretKey.nineRouterAPIKey
         case .githubCopilot, .ollama, .lmStudio:
             return nil
         }

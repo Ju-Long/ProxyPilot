@@ -304,6 +304,28 @@ public actor InputOutputLogStore {
             }
     }
 
+    public func readRecords(matchingSessionID sessionID: String) throws -> [InputOutputLogRecord] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+
+        let data = try Data(contentsOf: url)
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        var matchingRecords: [InputOutputLogRecord] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let encrypted = String(line).data(using: .utf8) else {
+                throw InputOutputLogStoreError.corruptLine
+            }
+            let decrypted = try decrypt(String(decoding: encrypted, as: UTF8.self))
+            let record = try decoder.decode(InputOutputLogRecord.self, from: decrypted)
+            if record.sessionID == sessionID {
+                matchingRecords.append(record)
+            }
+        }
+        return matchingRecords
+    }
+
     public func pruneExpired(now: Date = Date(), includeUntilQuit: Bool = false) throws {
         let records = try readRecords().filter { record in
             if includeUntilQuit, record.deleteOnQuit { return false }
@@ -514,6 +536,10 @@ public struct InputOutputLoggingRecorder: Sendable {
 
     public func readRecords() async throws -> [InputOutputLogRecord] {
         try await logStore.readRecords()
+    }
+
+    public func readRecords(matchingSessionID sessionID: String) async throws -> [InputOutputLogRecord] {
+        try await logStore.readRecords(matchingSessionID: sessionID)
     }
 
     public func exportJSONL(now: Date = Date()) async throws -> String {

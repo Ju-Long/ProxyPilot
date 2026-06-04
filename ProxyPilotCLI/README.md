@@ -97,7 +97,7 @@ proxypilot start [--port <port>] [--provider <provider>] [--upstream-url <url>] 
 | Flag | Default | Description |
 |---|---|---|
 | `--port`, `-p` | `4000` | Port to listen on |
-| `--provider` | `openai` | Upstream provider. Valid: `openai`, `groq`, `zai`, `openrouter`, `xai`, `chutes`, `google`, `deepseek`, `mistral`, `minimax`, `minimax-cn`, `qwen`, `github-copilot`, `ollama`, `lmstudio` |
+| `--provider` | `openai` | Upstream provider. Valid: `openai`, `groq`, `zai`, `openrouter`, `xai`, `chutes`, `google`, `deepseek`, `mistral`, `minimax`, `minimax-cn`, `qwen`, `9router`, `github-copilot`, `ollama`, `lmstudio` |
 | `--upstream-url` | provider default | Override upstream API base URL |
 | `--key` | — | Upstream API key. Falls back to environment variable, then keychain/secrets store |
 | `--key-stdin` | false | Read one API key line from stdin |
@@ -202,7 +202,7 @@ proxypilot auth set --provider <provider> [--key <value>] [--stdin] [--json]
 
 If neither `--key` nor `--stdin` is passed, `auth set` prompts securely in a TTY.  
 Prefer `--stdin` for non-interactive use. Use `--key` only when shell history retention is acceptable.
-Local/helper providers (`github-copilot`, `ollama`, `lmstudio`) are rejected with `E041`.
+Local/helper providers that do not accept ProxyPilot-managed credentials (`github-copilot`, `ollama`, `lmstudio`) are rejected with `E041`. `9router` does not require an upstream provider key, but `proxypilot auth set --provider 9router` can store an optional endpoint bearer token for 9Router gateways configured with `REQUIRE_API_KEY` or remote gateway auth.
 
 ---
 
@@ -219,7 +219,7 @@ proxypilot auth status [--provider <provider>] [--json]
 | `--provider` | all | Optional provider filter |
 | `--json` | false | Emit JSON output |
 
-Without `--provider`, all providers are listed and local providers are marked `not_required`.
+Without `--provider`, all providers are listed. Local providers are marked `not_required`; 9Router is marked `optional` until an endpoint bearer key is stored.
 
 ---
 
@@ -369,6 +369,7 @@ The server inherits `--provider` and `--key` defaults but tools can override bot
 | MiniMax | `minimax` | `https://api.minimax.io/v1` |
 | MiniMax CN | `minimax-cn` | `https://api.minimaxi.com/v1` |
 | Qwen | `qwen` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| 9Router | `9router` | `http://localhost:20128/v1` |
 | GitHub Copilot sidecar | `github-copilot` | `http://127.0.0.1:4141/v1` |
 | Ollama | `ollama` | `http://localhost:11434/v1` |
 | LM Studio | `lmstudio` | `http://localhost:1234/v1` |
@@ -442,7 +443,7 @@ Pass `--json` to any command to get machine-readable output on stdout.
 **Error:**
 
 ```json
-{"ok": false, "error": {"code": "E001", "message": "Unknown provider: foo", "suggestion": "Valid: openai, groq, zai, openrouter, xai, chutes, google, deepseek, mistral, minimax, minimax-cn, qwen, github-copilot, ollama, lmstudio"}}
+{"ok": false, "error": {"code": "E001", "message": "Unknown provider: foo", "suggestion": "Valid: openai, groq, zai, openrouter, xai, chutes, google, deepseek, mistral, minimax, minimax-cn, qwen, 9router, github-copilot, ollama, lmstudio"}}
 ```
 
 Error codes:

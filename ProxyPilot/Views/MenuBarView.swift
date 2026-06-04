@@ -129,7 +129,7 @@ struct MenuBarView: View {
                 SessionStatsView(
                     state: vm.localProxyState,
                     reportCard: vm.sessionReportCard,
-                    upstreamProviderTitle: vm.upstreamProvider.title,
+                    upstreamProviderTitle: vm.upstreamProviderDisplayTitle,
                     estimatedCostText: vm.sessionMenuCostText
                 )
             } else {

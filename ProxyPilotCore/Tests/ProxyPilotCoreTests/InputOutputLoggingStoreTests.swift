@@ -48,6 +48,67 @@ final class InputOutputLoggingStoreTests: XCTestCase {
         XCTAssertNil(decoded[1].outputTruncated)
     }
 
+    func testReadRecordsMatchingSessionIDReturnsOnlyThatSession() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let logURL = directory.appendingPathComponent("records.jsonl.enc")
+        let store = InputOutputLogStore(
+            url: logURL,
+            encryptionKey: Data(repeating: 7, count: 32)
+        )
+
+        let targetOlder = InputOutputLogRecord(
+            timestamp: Date(timeIntervalSince1970: 10),
+            source: "cli",
+            sessionID: "target",
+            path: "/v1/messages",
+            model: "glm-5",
+            provider: "zai",
+            wasStreaming: true,
+            statusCode: 200,
+            retentionExpiresAt: nil,
+            input: .utf8("target older prompt"),
+            output: .utf8("target older output")
+        )
+        let other = InputOutputLogRecord(
+            timestamp: Date(timeIntervalSince1970: 20),
+            source: "cli",
+            sessionID: "other",
+            path: "/v1/messages",
+            model: "glm-5",
+            provider: "zai",
+            wasStreaming: true,
+            statusCode: 200,
+            retentionExpiresAt: nil,
+            input: .utf8("other prompt"),
+            output: .utf8("other output")
+        )
+        let targetNewer = InputOutputLogRecord(
+            timestamp: Date(timeIntervalSince1970: 30),
+            source: "cli",
+            sessionID: "target",
+            path: "/v1/messages",
+            model: "glm-5",
+            provider: "zai",
+            wasStreaming: true,
+            statusCode: 200,
+            retentionExpiresAt: nil,
+            input: .utf8("target newer prompt"),
+            output: .utf8("target newer output")
+        )
+
+        try await store.append(targetOlder)
+        try await store.append(other)
+        try await store.append(targetNewer)
+
+        let decoded = try await store.readRecords(matchingSessionID: "target")
+        XCTAssertEqual(decoded.map(\.sessionID), ["target", "target"])
+        XCTAssertEqual(
+            decoded.map { $0.input?.text },
+            ["target older prompt", "target newer prompt"]
+        )
+    }
+
     func testRecordWithoutOutputTruncatedFieldDecodesAsNilForBackwardCompat() throws {
         // Records written by pre-v1.8.0 code do not include `outputTruncated`
         // in their JSON. The synthesized Codable must tolerate the missing
